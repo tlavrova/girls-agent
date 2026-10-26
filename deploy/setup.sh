@@ -4,6 +4,7 @@
 set -euo pipefail
 
 REPO=https://github.com/tlavrova/girls-agent.git
+IMAGE=ghcr.io/tlavrova/girls-agent:latest
 DIR="$HOME/girls-agent"
 
 if ! command -v docker >/dev/null || ! command -v git >/dev/null; then
@@ -26,9 +27,12 @@ if [ ! -f .env ]; then
     chmod 600 .env
 fi
 
-sudo docker build -q -t girls-agent .
+# Prefer the image built by GitHub Actions; fall back to building locally
+if ! sudo docker pull -q "$IMAGE"; then
+    sudo docker build -q -t "$IMAGE" .
+fi
 sudo docker rm -f girls-agent >/dev/null 2>&1 || true
 sudo docker run -d --name girls-agent --restart unless-stopped \
-    --env-file .env -v girls-agent-data:/data girls-agent
+    --env-file .env -v girls-agent-data:/data "$IMAGE"
 sleep 5
 sudo docker logs --tail 20 girls-agent

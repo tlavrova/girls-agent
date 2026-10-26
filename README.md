@@ -1,5 +1,7 @@
 # Girls Agent 💖
 
+[![CI](https://github.com/tlavrova/girls-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/tlavrova/girls-agent/actions/workflows/ci.yml)
+
 A Telegram bot that organizes meetups for a group of friends: it runs a monthly date poll, reminds people who haven't voted, suggests what to do, and keeps a shared agenda so plans don't get lost in the chat.
 
 The bot talks to the group in Russian; the code and docs are in English.
@@ -77,16 +79,26 @@ On a fresh Ubuntu VM, one command installs Docker, asks for the token and starts
 curl -fsSL https://raw.githubusercontent.com/tlavrova/girls-agent/main/deploy/setup.sh -o setup.sh && bash setup.sh
 ```
 
-Or manually, with Docker installed:
+Or manually, with Docker installed, using the prebuilt image:
 
 ```bash
-docker build -t girls-agent .
-docker run -d --name girls-agent --restart unless-stopped --env-file .env -v girls-agent-data:/data girls-agent
+docker run -d --name girls-agent --restart unless-stopped --env-file .env -v girls-agent-data:/data ghcr.io/tlavrova/girls-agent:latest
 ```
 
 **Paid but simplest:** Railway (~$5/month): deploy from the GitHub repo, set `BOT_TOKEN` and `TIMEZONE` in Variables, attach a volume at `/data`.
 
 Only one copy of the bot can run per token: stop the local one before starting it on a server.
+
+## CI/CD
+
+[GitHub Actions](.github/workflows/ci.yml) runs on every push and pull request:
+
+1. **test**: runs the unit tests.
+2. **docker**: builds a multi-arch image (`linux/amd64` + `linux/arm64`) and pushes it to GitHub Container Registry as `ghcr.io/tlavrova/girls-agent`. Pull requests only build, they don't push.
+
+Tags: `latest` for `main`, `sha-<commit>` for every build, and `1.2.3` for git tags like `v1.2.3`.
+
+To update a running server, run `deploy/setup.sh` again: it pulls the latest image and restarts the container.
 
 ## Roadmap: AI assistant
 
