@@ -408,6 +408,9 @@ def build_app(cfg: Config) -> Application:
 
 def main() -> None:
     logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
+    # httpx logs every request URL, and Telegram URLs contain the bot token
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
     cfg = load_config()
     app = build_app(cfg)
     log.info("Girls Agent started")
