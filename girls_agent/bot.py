@@ -190,8 +190,13 @@ async def finish_poll(bot: Bot, db: Database, cfg: Config, poll) -> None:
         )
         try:  # pin it if the bot is a chat admin
             await bot.pin_chat_message(chat_id, msg.message_id, disable_notification=True)
-        except TelegramError:
-            pass
+        except TelegramError as e:
+            log.info("pin failed in %s: %s", chat_id, e)
+            await bot.send_message(
+                chat_id,
+                "Хотела закрепить план, но у меня нет прав 📌 "
+                "Сделайте меня админом с правом «Закреплять сообщения» — и в следующий раз закреплю сама.",
+            )
 
 
 async def remind(bot: Bot, db: Database, poll, *, quiet_if_done: bool) -> None:

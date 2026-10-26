@@ -103,7 +103,8 @@ To update a running server, run `deploy/setup.sh` again: it pulls the latest ima
 ## Roadmap: AI assistant
 
 1. **Chat assistant**: when mentioned (`@girls_agent_meetup_bot ...`), answer anything via an LLM: general questions, jokes, the weather (through a weather API such as Open-Meteo), using recent chat messages as context.
-2. **Understand chat messages**: use an LLM to spot suggestions like "let's go to this café" and offer to save them to the idea bank.
-3. **Links and screenshots**: extract name, address, date and price from a restaurant link, event page or screenshot.
-4. **Smarter suggestions**: factor in date, weather, budget and past meetups when picking the 2-3 options (replacing `planner.pick_ideas`).
-5. **Delegation**: "book a table for 6", "remind everyone the day before".
+2. **Emotional support**: without being mentioned, notice when someone in the chat is having a hard time ("ужасный день", "устала") and reply with a short, warm message of support. A cheap model classifies messages first so the bot speaks up rarely and only when it fits; it never replies to the same person twice in a row. Requires privacy mode off, and the group should know the bot reads messages.
+3. **Understand chat messages**: use an LLM to spot suggestions like "let's go to this café" and offer to save them to the idea bank.
+4. **Links and screenshots**: extract name, address, date and price from a restaurant link, event page or screenshot.
+5. **Smarter suggestions**: factor in date, weather, budget and past meetups when picking the 2-3 options (replacing `planner.pick_ideas`).
+6. **Delegation**: "book a table for 6", "remind everyone the day before".

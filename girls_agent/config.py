@@ -36,7 +36,7 @@ def load_config() -> Config:
         raise SystemExit("BOT_TOKEN is not set: copy .env.example to .env and paste the token from @BotFather")
     return Config(
         token=token,
-        tz=ZoneInfo(os.environ.get("TIMEZONE", "Europe/Moscow")),
+        tz=ZoneInfo(os.environ.get("TIMEZONE", "Europe/Amsterdam")),
         db_path=os.environ.get("DB_PATH", "girls_agent.sqlite3"),
         meeting_weekdays=_int_list(os.environ.get("MEETING_WEEKDAYS", "5,6")),
         poll_weekday=int(os.environ.get("POLL_WEEKDAY", "5")),
