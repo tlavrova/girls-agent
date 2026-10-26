@@ -71,7 +71,13 @@ The bot runs as long as its process runs, so for always-on operation it needs a 
 - **Google Cloud free tier**: one `e2-micro` VM in selected US regions. Also requires a card.
 - **Any always-on machine at home** (old laptop, Raspberry Pi).
 
-On a VM, install Docker and run:
+On a fresh Ubuntu VM, one command installs Docker, asks for the token and starts the bot (run it again to update):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tlavrova/girls-agent/main/deploy/setup.sh -o setup.sh && bash setup.sh
+```
+
+Or manually, with Docker installed:
 
 ```bash
 docker build -t girls-agent .
