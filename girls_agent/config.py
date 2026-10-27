@@ -37,6 +37,11 @@ class Config:
     poll_time: tuple          # (hours, minutes)
     reminder_time: tuple
     goodnight_time: Optional[tuple]  # None = no good-night message
+    morning_time: Optional[tuple]    # None = no morning message
+    weather_city: str                # shown in messages
+    weather_lat: float
+    weather_lon: float
+    news_feed: str                   # RSS feed for the morning's top news
     llm_api_key: Optional[str]       # None = the chat assistant is off
     llm_base_url: str                # any OpenAI-compatible API
     llm_models: tuple                # tried in order until one answers
@@ -62,6 +67,11 @@ def load_config() -> Config:
         poll_time=_hhmm(os.environ.get("POLL_TIME", "11:00")),
         reminder_time=_hhmm(os.environ.get("REMINDER_TIME", "18:00")),
         goodnight_time=_optional_hhmm(os.environ.get("GOODNIGHT_TIME", "23:00")),
+        morning_time=_optional_hhmm(os.environ.get("MORNING_TIME", "07:00")),
+        weather_city=os.environ.get("WEATHER_CITY", "Амстердам"),
+        weather_lat=float(os.environ.get("WEATHER_LAT", "52.37")),
+        weather_lon=float(os.environ.get("WEATHER_LON", "4.90")),
+        news_feed=os.environ.get("NEWS_FEED", "https://feeds.bbci.co.uk/news/world/rss.xml"),
         llm_api_key=os.environ.get("LLM_API_KEY") or None,
         llm_base_url=os.environ.get("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"),
         llm_models=tuple(m.strip() for m in os.environ.get(

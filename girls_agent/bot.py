@@ -31,7 +31,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import llm, planner
+from . import llm, morning, planner
 from .config import Config, load_config
 from .db import Database
 from .goodnight import GOODNIGHT
@@ -72,6 +72,7 @@ HELP = (
     "🔔 Мягко напоминаю тем, кто ещё не проголосовал\n"
     "✨ Когда дата выбрана, предлагаю 3 варианта: ресторан, вечеринка или событие\n"
     "📒 Записываю план в общую повестку и закрепляю его в чате\n"
+    "☀️ По утрам — пожелание, главная новость и погода\n"
     "🌙 Каждый вечер желаю всем спокойной ночи\n"
     "💬 Тегни меня или ответь на моё сообщение — поболтаем\n\n"
     "<b>Команды</b>\n"
@@ -275,6 +276,20 @@ async def goodnight_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_message(chat_id, planner.daily_pick(GOODNIGHT, today, seed=chat_id))
         except TelegramError as e:
             log.warning("good-night message failed for %s: %s", chat_id, e)
+
+
+async def morning_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    db, cfg = _db(context), _cfg(context)
+    chat_ids = db.chat_ids()
+    if not chat_ids:
+        return
+    # composed once for all chats: one LLM request a day
+    text = await morning.compose(cfg, datetime.now(cfg.tz))
+    for chat_id in chat_ids:
+        try:
+            await context.bot.send_message(chat_id, text)
+        except TelegramError as e:
+            log.warning("morning message failed for %s: %s", chat_id, e)
 
 
 async def close_due_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -498,6 +513,8 @@ def build_app(cfg: Config) -> Application:
     jq = app.job_queue
     jq.run_monthly(monthly_job, dtime(*cfg.poll_time, tzinfo=cfg.tz), day=cfg.poll_day, name="monthly")
     jq.run_daily(reminder_job, dtime(*cfg.reminder_time, tzinfo=cfg.tz), name="reminders")
+    if cfg.morning_time:
+        jq.run_daily(morning_job, dtime(*cfg.morning_time, tzinfo=cfg.tz), name="morning")
     if cfg.goodnight_time:
         jq.run_daily(goodnight_job, dtime(*cfg.goodnight_time, tzinfo=cfg.tz), name="goodnight")
     jq.run_repeating(close_due_job, interval=600, first=10, name="close_due")

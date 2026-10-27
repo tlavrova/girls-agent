@@ -15,8 +15,9 @@ The bot talks to the group in Russian; the code and docs are in English.
 | 3. Date picked | After 3 days (or on `/close`) the date with the most votes wins; ties go to the earlier date. |
 | 4. Activity | It offers 3 options of different kinds (restaurant / party / event), preferring ideas the group saved itself, then a starter set. A second poll runs for 48 hours. |
 | 5. Agenda | The final plan is saved, pinned in the chat (if the bot is an admin), and listed by `/agenda`. |
-| 6. Good night | Every evening at 23:00 a playful good-night message from a list of 40 (`goodnight.py`), no repeats until the list runs out. Set `GOODNIGHT_TIME=off` to disable. |
-| 7. Chat | Mention Gigi or reply to one of her messages and she answers via an LLM (Google Gemini by default, free tier; any OpenAI-compatible API via `LLM_BASE_URL` / `LLM_MODELS`, a fallback list tried in order when a model is overloaded or out of quota; the free tier allows only a few dozen requests per model per day, so lite models with higher limits go first). Only that message and the one it replies to are sent, never the whole chat; at most `LLM_DAILY_LIMIT` answers per chat per day. Off unless `LLM_API_KEY` is set. |
+| 6. Morning | Every day at 07:00 a short message: a wish for the day, the top world news in one sentence (BBC World RSS, picked and retold by the LLM) and the weather (Open-Meteo, free, no key). Composed once for all chats, so it costs one LLM request a day. `MORNING_TIME=off` disables it; city and feed are configurable. |
+| 7. Good night | Every evening at 23:00 a playful good-night message from a list of 40 (`goodnight.py`), no repeats until the list runs out. Set `GOODNIGHT_TIME=off` to disable. |
+| 8. Chat | Mention Gigi or reply to one of her messages and she answers via an LLM (Google Gemini by default, free tier; any OpenAI-compatible API via `LLM_BASE_URL` / `LLM_MODELS`, a fallback list tried in order when a model is overloaded or out of quota; the free tier allows only a few dozen requests per model per day, so lite models with higher limits go first). Only that message and the one it replies to are sent, never the whole chat; at most `LLM_DAILY_LIMIT` answers per chat per day. Off unless `LLM_API_KEY` is set. |
 
 ### Commands
 
@@ -58,6 +59,7 @@ girls_agent/
   config.py      settings from environment / .env
   seed_ideas.py  starter activity ideas
   goodnight.py   good-night messages
+  morning.py     morning message: weather, news headlines, LLM prompt
   llm.py         chat assistant: persona prompt and the OpenAI-compatible API call
 ```
 
@@ -110,7 +112,6 @@ To update a running server, run `deploy/setup.sh` again: it pulls the latest ima
 All times are in the configured time zone (Europe/Amsterdam by default), each message can be switched off in `.env`, and the city is configurable.
 
 1. **Weekend picks, Mondays**: every Monday a message with **3** interesting events for the coming weekend: parties, clubs, concerts, stand-up, and something for the whole family. Each with a short description, date and time, and location. Found via an LLM with web search (or an events API) and checked to fall on that weekend.
-2. **Good morning, daily at 07:00**: a greeting with a kind wish for the day, the day's top world news in one or two sentences (from a news API or RSS feed, summarized by an LLM), and the day's weather forecast in one line (Open-Meteo: temperature, rain, wind). The whole message stays short: about 3-4 lines.
 
 ## Roadmap: AI assistant
 

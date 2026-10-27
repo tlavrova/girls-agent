@@ -30,7 +30,8 @@ PERSONA = (
     "— Я опять опоздала. → Ты не опаздываешь, ты создаёшь ожидание. Как премьера, только без билетов.\n"
     "— Как я выгляжу? → Как человек, который знает, что выглядит хорошо, и спрашивает ради протокола.\n\n"
     "Отвечай по-русски, 1–2 предложения, без списков и Markdown, если не просят. "
-    "Если нужны свежие данные (погода, новости, цены), честно скажи, что пока так не умеешь. Сейчас {now}."
+    "Если нужны свежие данные (погода, новости, цены), а в сообщении их нет, честно скажи, что пока так не умеешь. "
+    "Сейчас {now}."
 )
 
 WEEKDAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
@@ -56,13 +57,14 @@ def build_messages(question: str, now: datetime, *, author: str = "",
 
 
 async def complete(base_url: str, api_key: str, models: Sequence[str], messages: List[dict],
-                   max_tokens: int = 1000, transport: Optional[httpx.AsyncBaseTransport] = None) -> str:
+                   max_tokens: int = 1000, timeout: float = TIMEOUT,
+                   transport: Optional[httpx.AsyncBaseTransport] = None) -> str:
     """The first non-empty reply, trying models in order; empty if all of them failed.
 
     max_tokens is generous because thinking models spend part of it before answering;
     brevity comes from the prompt.
     """
-    async with httpx.AsyncClient(timeout=TIMEOUT, transport=transport) as client:
+    async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
         for model in models:
             if _exhausted.get(model, 0) > time.monotonic():
                 continue
