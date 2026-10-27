@@ -100,9 +100,22 @@ Tags: `latest` for `main`, `sha-<commit>` for every build, and `1.2.3` for git t
 
 To update a running server, run `deploy/setup.sh` again: it pulls the latest image and restarts the container.
 
+## Roadmap: changes to the current flow
+
+1. **Poll on the 20th**: start the date poll on the **20th of each month** (at the same time) instead of the last Saturday, still for next month's weekends. Replaces `poll_weekday` with a day-of-month setting.
+2. **New introduction**: the bot introduces itself by name, **Gigi**. Rewrite `/start` and `/help` to be shorter and warmer: who Gigi is, what she does for the group (polls, reminders, ideas, agenda, daily messages) and the main commands. Also set the bot's name, description and "about" text in BotFather.
+
+## Roadmap: daily and weekly messages
+
+All times are in the configured time zone (Europe/Amsterdam by default), each message can be switched off in `.env`, and the city is configurable.
+
+1. **Weekend picks, Mondays**: every Monday a message with **3** interesting events for the coming weekend: parties, clubs, concerts, stand-up, and something for the whole family. Each with a short description, date and time, and location. Found via an LLM with web search (or an events API) and checked to fall on that weekend.
+2. **Good morning, daily at 07:00**: a greeting with a kind wish for the day plus the day's top world news in one or two sentences (from a news API or RSS feed, summarized by an LLM).
+3. **Good night, daily at 23:00**: a short, playful good-night message for everyone, a different one each day.
+
 ## Roadmap: AI assistant
 
-1. **Chat assistant**: when mentioned (`@girls_agent_meetup_bot ...`), answer anything via an LLM: general questions, jokes, the weather (through a weather API such as Open-Meteo), using recent chat messages as context.
+1. **Chat assistant**: answers when mentioned (`@girls_agent_meetup_bot ...`) **or when someone replies to one of its messages**, via an LLM: general questions, jokes, the weather (through a weather API such as Open-Meteo). To keep token use low it does not read the whole chat: the LLM only sees the mention or reply itself and the message it answers. Replies to the bot reach it even with privacy mode on.
 2. **Emotional support**: without being mentioned, notice when someone in the chat is having a hard time ("ужасный день", "устала") and reply with a short, warm message of support. A cheap model classifies messages first so the bot speaks up rarely and only when it fits; it never replies to the same person twice in a row. Requires privacy mode off, and the group should know the bot reads messages.
 3. **Understand chat messages**: use an LLM to spot suggestions like "let's go to this café" and offer to save them to the idea bank.
 4. **Links and screenshots**: extract name, address, date and price from a restaurant link, event page or screenshot.
