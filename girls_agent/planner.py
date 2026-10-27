@@ -39,6 +39,18 @@ def next_month(today: date) -> tuple:
     return today.year, today.month + 1
 
 
+def daily_pick(items: Sequence, day: date, seed: int = 0):
+    """An item for the given day: a shuffled pass through all items, then a new shuffle.
+
+    Stateless, so it survives restarts, and no item repeats until all of them were used.
+    """
+    n = len(items)
+    ordinal = day.toordinal()
+    cycle, pos = divmod(ordinal, n)
+    order = random.Random(f"{seed}:{cycle}").sample(range(n), n)
+    return items[order[pos]]
+
+
 def candidate_dates(today: date, weekdays: Iterable[int], limit: int = MAX_DATE_OPTIONS) -> List[date]:
     """All days of next month that fall on the given weekdays (0 = Monday)."""
     wanted = set(weekdays)

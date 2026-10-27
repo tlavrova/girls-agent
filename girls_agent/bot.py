@@ -33,6 +33,7 @@ from telegram.ext import (
 from . import planner
 from .config import Config, load_config
 from .db import Database
+from .goodnight import GOODNIGHT
 from .seed_ideas import SEED_IDEAS
 
 log = logging.getLogger("girls_agent")
@@ -69,7 +70,8 @@ HELP = (
     "🗓 {poll_day}-го числа спрашиваю, в какие выходные следующего месяца всем удобно\n"
     "🔔 Мягко напоминаю тем, кто ещё не проголосовал\n"
     "✨ Когда дата выбрана, предлагаю 3 варианта: ресторан, вечеринка или событие\n"
-    "📒 Записываю план в общую повестку и закрепляю его в чате\n\n"
+    "📒 Записываю план в общую повестку и закрепляю его в чате\n"
+    "🌙 Каждый вечер желаю всем спокойной ночи\n\n"
     "<b>Команды</b>\n"
     + "".join(f"/{name} — {text}\n" for name, text in COMMANDS)
     + "\nВиды идей: ресторан, вечеринка, мероприятие."
@@ -263,6 +265,16 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             log.warning("reminder failed for %s: %s", poll["chat_id"], e)
 
 
+async def goodnight_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    db, cfg = _db(context), _cfg(context)
+    today = datetime.now(cfg.tz).date()
+    for chat_id in db.chat_ids():
+        try:
+            await context.bot.send_message(chat_id, planner.daily_pick(GOODNIGHT, today, seed=chat_id))
+        except TelegramError as e:
+            log.warning("good-night message failed for %s: %s", chat_id, e)
+
+
 async def close_due_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     db, cfg = _db(context), _cfg(context)
     for poll in db.due_polls(datetime.now(timezone.utc)):
@@ -442,6 +454,8 @@ def build_app(cfg: Config) -> Application:
     jq = app.job_queue
     jq.run_monthly(monthly_job, dtime(*cfg.poll_time, tzinfo=cfg.tz), day=cfg.poll_day, name="monthly")
     jq.run_daily(reminder_job, dtime(*cfg.reminder_time, tzinfo=cfg.tz), name="reminders")
+    if cfg.goodnight_time:
+        jq.run_daily(goodnight_job, dtime(*cfg.goodnight_time, tzinfo=cfg.tz), name="goodnight")
     jq.run_repeating(close_due_job, interval=600, first=10, name="close_due")
     return app
 

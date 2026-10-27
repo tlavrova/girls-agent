@@ -19,6 +19,21 @@ class PlannerTest(unittest.TestCase):
         self.assertEqual(len(dates), 9)
         self.assertEqual(dates[0], date(2027, 1, 1))
 
+    def test_daily_pick_no_repeats_within_a_cycle(self):
+        items = list(range(40))
+        start = date(2026, 1, 1)
+        start = start + timedelta(days=-start.toordinal() % 40)  # first day of a cycle
+        picks = [planner.daily_pick(items, start + timedelta(days=i), seed=-100123) for i in range(40)]
+        self.assertEqual(sorted(picks), items)
+
+    def test_daily_pick_stable_and_differs_per_chat(self):
+        items = list(range(40))
+        d = date(2026, 10, 27)
+        self.assertEqual(planner.daily_pick(items, d, seed=1), planner.daily_pick(items, d, seed=1))
+        days = [d + timedelta(days=i) for i in range(10)]
+        self.assertNotEqual([planner.daily_pick(items, x, seed=1) for x in days],
+                            [planner.daily_pick(items, x, seed=2) for x in days])
+
     def test_format_date(self):
         self.assertEqual(planner.format_date(date(2026, 11, 6)), "пт, 6 ноября")
 

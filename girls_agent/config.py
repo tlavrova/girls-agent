@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -16,6 +17,12 @@ def _hhmm(value: str) -> tuple:
     return int(hours), int(minutes)
 
 
+def _optional_hhmm(value: str) -> Optional[tuple]:
+    """HH:MM, or None when the message is switched off (empty or "off")."""
+    value = value.strip().lower()
+    return None if value in ("", "off") else _hhmm(value)
+
+
 @dataclass(frozen=True)
 class Config:
     token: str
@@ -25,6 +32,7 @@ class Config:
     poll_day: int             # day of the month the poll for next month starts (1-28)
     poll_time: tuple          # (hours, minutes)
     reminder_time: tuple
+    goodnight_time: Optional[tuple]  # None = no good-night message
     date_poll_days: int
     activity_poll_hours: int
 
@@ -45,6 +53,7 @@ def load_config() -> Config:
         poll_day=poll_day,
         poll_time=_hhmm(os.environ.get("POLL_TIME", "11:00")),
         reminder_time=_hhmm(os.environ.get("REMINDER_TIME", "18:00")),
+        goodnight_time=_optional_hhmm(os.environ.get("GOODNIGHT_TIME", "23:00")),
         date_poll_days=int(os.environ.get("DATE_POLL_DAYS", "3")),
         activity_poll_hours=int(os.environ.get("ACTIVITY_POLL_HOURS", "48")),
     )
