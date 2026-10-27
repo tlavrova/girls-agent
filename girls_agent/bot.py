@@ -15,10 +15,11 @@ import html
 import json
 import logging
 import random
+import re
 from datetime import date, datetime, time as dtime, timedelta, timezone
 
 from telegram import Bot, Update
-from telegram.constants import ParseMode
+from telegram.constants import ChatAction, MessageEntityType, ParseMode
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
@@ -30,7 +31,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import planner
+from . import llm, planner
 from .config import Config, load_config
 from .db import Database
 from .goodnight import GOODNIGHT
@@ -71,7 +72,8 @@ HELP = (
     "🔔 Мягко напоминаю тем, кто ещё не проголосовал\n"
     "✨ Когда дата выбрана, предлагаю 3 варианта: ресторан, вечеринка или событие\n"
     "📒 Записываю план в общую повестку и закрепляю его в чате\n"
-    "🌙 Каждый вечер желаю всем спокойной ночи\n\n"
+    "🌙 Каждый вечер желаю всем спокойной ночи\n"
+    "💬 Тегни меня или ответь на моё сообщение — поболтаем\n\n"
     "<b>Команды</b>\n"
     + "".join(f"/{name} — {text}\n" for name, text in COMMANDS)
     + "\nВиды идей: ресторан, вечеринка, мероприятие."
@@ -297,6 +299,50 @@ async def track_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         db.upsert_member(chat.id, user.id, display_name(user))
 
 
+def addresses_gigi(message, bot) -> bool:
+    """True if the message mentions the bot or replies to one of its messages."""
+    reply = message.reply_to_message
+    if reply and reply.from_user and reply.from_user.id == bot.id:
+        return True
+    for entity, text in message.parse_entities([MessageEntityType.MENTION, MessageEntityType.TEXT_MENTION]).items():
+        if text.lower() == f"@{bot.username}".lower() or (entity.user and entity.user.id == bot.id):
+            return True
+    return False
+
+
+async def assistant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message, cfg, bot = update.effective_message, _cfg(context), context.bot
+    if not addresses_gigi(message, bot):
+        return
+    question = re.sub(f"@{re.escape(bot.username)}", "", message.text, flags=re.IGNORECASE).strip()
+    if not question:
+        await message.reply_text("Да-да? 💁‍♀️")
+        return
+
+    # per-chat daily limit, kept in memory: a restart simply resets it
+    today = datetime.now(cfg.tz).date()
+    counts = context.bot_data.setdefault("llm_counts", {})
+    key = (message.chat_id, today)
+    if counts.get(key, 0) >= cfg.llm_daily_limit:
+        await message.reply_text("На сегодня я наболталась 🙄 Завтра продолжим.")
+        return
+    counts[key] = counts.get(key, 0) + 1
+
+    reply = message.reply_to_message
+    replied_text = (reply.text or reply.caption) if reply else None
+    messages = llm.build_messages(
+        question, today, author=display_name(update.effective_user), replied_text=replied_text,
+        replied_is_gigi=bool(reply and reply.from_user and reply.from_user.id == bot.id),
+    )
+    await bot.send_chat_action(message.chat_id, ChatAction.TYPING)
+    try:
+        answer = await llm.complete(cfg.llm_base_url, cfg.llm_api_key, cfg.llm_model, messages)
+    except Exception as e:  # network, quota, bad response: never crash the handler
+        log.warning("LLM request failed: %s", e)
+        answer = ""
+    await message.reply_text(answer or "Что-то я зависла 😵‍💫 Спроси ещё раз чуть позже.")
+
+
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = HELP.format(poll_day=_cfg(context).poll_day)
     if update.effective_chat.type == update.effective_chat.PRIVATE:
@@ -449,6 +495,8 @@ def build_app(cfg: Config) -> Application:
     app.add_handler(CommandHandler("agenda", agenda_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("cancel", cancel_cmd, filters.ChatType.GROUPS))
     app.add_handler(PollAnswerHandler(poll_answer))
+    if cfg.llm_api_key:
+        app.add_handler(MessageHandler(filters.UpdateType.MESSAGE & filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, assistant))
     app.add_error_handler(on_error)
 
     jq = app.job_queue

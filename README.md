@@ -16,6 +16,7 @@ The bot talks to the group in Russian; the code and docs are in English.
 | 4. Activity | It offers 3 options of different kinds (restaurant / party / event), preferring ideas the group saved itself, then a starter set. A second poll runs for 48 hours. |
 | 5. Agenda | The final plan is saved, pinned in the chat (if the bot is an admin), and listed by `/agenda`. |
 | 6. Good night | Every evening at 23:00 a playful good-night message from a list of 40 (`goodnight.py`), no repeats until the list runs out. Set `GOODNIGHT_TIME=off` to disable. |
+| 7. Chat | Mention Gigi or reply to one of her messages and she answers via an LLM (Google Gemini by default, free tier; any OpenAI-compatible API via `LLM_BASE_URL` / `LLM_MODEL`). Only that message and the one it replies to are sent, never the whole chat; at most `LLM_DAILY_LIMIT` answers per chat per day. Off unless `LLM_API_KEY` is set. |
 
 ### Commands
 
@@ -57,6 +58,7 @@ girls_agent/
   config.py      settings from environment / .env
   seed_ideas.py  starter activity ideas
   goodnight.py   good-night messages
+  llm.py         chat assistant: persona prompt and the OpenAI-compatible API call
 ```
 
 Notes:
@@ -112,10 +114,11 @@ All times are in the configured time zone (Europe/Amsterdam by default), each me
 
 ## Roadmap: AI assistant
 
-1. **Chat assistant**: answers when mentioned (`@girls_agent_meetup_bot ...`) **or when someone replies to one of its messages**, via an LLM: general questions, jokes, the weather (through a weather API such as Open-Meteo). To keep token use low it does not read the whole chat: the LLM only sees the mention or reply itself and the message it answers. Replies to the bot reach it even with privacy mode on.
-2. **Emotional support**: without being mentioned, notice when someone in the chat is having a hard time ("ужасный день", "устала") and reply with a short, warm message of support. A cheap model classifies messages first so the bot speaks up rarely and only when it fits; it never replies to the same person twice in a row. Requires privacy mode off, and the group should know the bot reads messages.
-3. **Understand chat messages**: use an LLM to spot suggestions like "let's go to this café" and offer to save them to the idea bank.
-4. **Fresh good-night wishes**: once the LLM is connected, let it write each day's good-night message, keeping the list in `goodnight.py` as a fallback.
-5. **Links and screenshots**: extract name, address, date and price from a restaurant link, event page or screenshot.
-6. **Smarter suggestions**: factor in date, weather, budget and past meetups when picking the 2-3 options (replacing `planner.pick_ideas`).
-7. **Delegation**: "book a table for 6", "remind everyone the day before".
+Rule for everything below: Gigi only sees messages that mention her or reply to her. She never reads the whole chat, for privacy and to keep token use low.
+
+1. **Weather**: let the chat assistant answer weather questions through a free weather API such as Open-Meteo.
+2. **Save ideas by tag**: "@Gigi сохрани идею: кафе X" (or a link) adds it to the idea bank, so nobody has to remember the `/idea` syntax.
+3. **Fresh good-night wishes**: once the LLM is connected, let it write each day's good-night message, keeping the list in `goodnight.py` as a fallback.
+4. **Links and screenshots**: extract name, address, date and price from a restaurant link, event page or screenshot.
+5. **Smarter suggestions**: factor in date, weather, budget and past meetups when picking the 2-3 options (replacing `planner.pick_ideas`).
+6. **Delegation**: "book a table for 6", "remind everyone the day before".
