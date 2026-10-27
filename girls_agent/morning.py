@@ -1,6 +1,6 @@
 """Morning message: a wish for the day, the top world news and the weather, in 3-4 lines.
 
-Weather comes from Open-Meteo and headlines from an RSS feed, both free and keyless.
+Weather comes from Open-Meteo (weather.py) and headlines from an RSS feed, both free and keyless.
 The LLM writes the message once a day and it goes to every chat, so it costs one request.
 """
 from __future__ import annotations
@@ -8,32 +8,17 @@ from __future__ import annotations
 import logging
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from typing import List, Optional
+from typing import List
 
 import httpx
 
-from . import llm
+from . import llm, weather
 
 log = logging.getLogger("girls_agent")
 
-WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
 TIMEOUT = 15
 # Nobody is waiting for the morning message, so give slow free-tier models time to answer
 LLM_TIMEOUT = 90
-
-# WMO weather codes used by Open-Meteo, grouped: (highest code in the group, emoji, Russian description)
-WEATHER_CODES = [
-    (0, "☀️", "ясно"),
-    (2, "🌤", "переменная облачность"),
-    (3, "☁️", "пасмурно"),
-    (48, "🌫", "туман"),
-    (57, "🌦", "морось"),
-    (67, "🌧", "дождь"),
-    (77, "❄️", "снег"),
-    (82, "🌦", "ливни"),
-    (86, "🌨", "снегопад"),
-    (99, "⛈", "гроза"),
-]
 
 PROMPT = (
     "Напиши утреннее сообщение для чата подруг: ровно три строки (здесь можно длиннее обычного), без Markdown:\n"
@@ -45,25 +30,6 @@ PROMPT = (
     "Погода на сегодня: {weather}\n\n"
     "Новости:\n{news}"
 )
-
-
-def describe_weather(code: int) -> tuple:
-    """(emoji, description) for a WMO weather code."""
-    for top, emoji, text in WEATHER_CODES:
-        if code <= top:
-            return emoji, text
-    return "🌡", "погода"
-
-
-def weather_summary(daily: dict) -> tuple:
-    """(emoji, facts) from Open-Meteo's `daily` block for one day."""
-    emoji, text = describe_weather(int(daily["weather_code"][0]))
-    facts = (
-        f"{text}, от {round(daily['temperature_2m_min'][0])}° до {round(daily['temperature_2m_max'][0])}°, "
-        f"вероятность осадков {daily['precipitation_probability_max'][0]}%, "
-        f"ветер до {round(daily['wind_speed_10m_max'][0])} км/ч"
-    )
-    return emoji, facts
 
 
 def parse_headlines(rss: bytes, limit: int = 10) -> List[str]:
@@ -79,20 +45,6 @@ def parse_headlines(rss: bytes, limit: int = 10) -> List[str]:
     return items
 
 
-async def fetch_weather(client: httpx.AsyncClient, lat: float, lon: float, tz: str) -> Optional[tuple]:
-    try:
-        resp = await client.get(WEATHER_URL, params={
-            "latitude": lat, "longitude": lon, "timezone": tz, "forecast_days": 1,
-            "daily": "weather_code,temperature_2m_max,temperature_2m_min,"
-                     "precipitation_probability_max,wind_speed_10m_max",
-        })
-        resp.raise_for_status()
-        return weather_summary(resp.json()["daily"])
-    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as e:
-        log.warning("weather request failed: %s %s", type(e).__name__, e)
-        return None
-
-
 async def fetch_headlines(client: httpx.AsyncClient, url: str) -> List[str]:
     try:
         resp = await client.get(url, follow_redirects=True)
@@ -106,9 +58,9 @@ async def fetch_headlines(client: httpx.AsyncClient, url: str) -> List[str]:
 async def compose(cfg, now: datetime) -> str:
     """Today's morning message; falls back to a plain greeting with the weather if the LLM is unavailable."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        weather = await fetch_weather(client, cfg.weather_lat, cfg.weather_lon, str(cfg.tz))
+        today = await weather.forecast(client, cfg.weather_lat, cfg.weather_lon, str(cfg.tz), now.date())
         news = await fetch_headlines(client, cfg.news_feed)
-    emoji, facts = weather or ("🌡", "нет данных")
+    emoji, facts = today or ("🌡", "нет данных")
 
     answer = ""
     if cfg.llm_api_key and news:
@@ -121,6 +73,6 @@ async def compose(cfg, now: datetime) -> str:
         return answer
 
     lines = ["Доброе утро, девочки ☀️ Пусть день будет добрым."]
-    if weather:
+    if today:
         lines.append(f"{emoji} {cfg.weather_city}: {facts}.")
     return "\n".join(lines)

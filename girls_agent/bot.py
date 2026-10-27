@@ -11,6 +11,8 @@ Messages to users are in Russian: the bot serves a Russian-speaking group.
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import html
 import json
 import logging
@@ -31,7 +33,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import llm, morning, planner
+from . import llm, morning, planner, weather
 from .config import Config, load_config
 from .db import Database
 from .goodnight import GOODNIGHT
@@ -74,7 +76,7 @@ HELP = (
     "📒 Записываю план в общую повестку и закрепляю его в чате\n"
     "☀️ По утрам — пожелание, главная новость и погода\n"
     "🌙 Каждый вечер желаю всем спокойной ночи\n"
-    "💬 Тегни меня или ответь на моё сообщение — поболтаем\n\n"
+    "💬 Тегни меня или ответь на моё сообщение — поболтаем. Могу сделать опрос или подсказать погоду\n\n"
     "<b>Команды</b>\n"
     + "".join(f"/{name} — {text}\n" for name, text in COMMANDS)
     + "\nВиды идей: ресторан, вечеринка, мероприятие."
@@ -349,9 +351,69 @@ async def assistant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         question, now, author=display_name(update.effective_user), replied_text=replied_text,
         replied_is_gigi=bool(reply and reply.from_user and reply.from_user.id == bot.id),
     )
-    await bot.send_chat_action(message.chat_id, ChatAction.TYPING)
-    answer = await llm.complete(cfg.llm_base_url, cfg.llm_api_key, cfg.llm_models, messages)
-    await message.reply_text(answer or "Что-то я зависла 😵‍💫 Спроси ещё раз чуть позже.")
+    typing = asyncio.create_task(keep_typing(bot, message.chat_id))
+    try:
+        await answer_with_llm(message, cfg, messages, now)
+    finally:
+        typing.cancel()
+
+
+async def keep_typing(bot: Bot, chat_id: int) -> None:
+    """Show "Gigi is typing…" until cancelled; Telegram clears it after about 5 seconds."""
+    while True:
+        try:
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
+        except TelegramError:
+            pass
+        await asyncio.sleep(4)
+
+
+async def answer_with_llm(message, cfg: Config, messages: list, now: datetime) -> None:
+    ask = functools.partial(llm.chat, cfg.llm_base_url, cfg.llm_api_key, cfg.llm_models, tools=llm.TOOLS)
+    reply_msg = await ask(messages)
+    call = llm.tool_call(reply_msg) if reply_msg else None
+    if call and call[0] == "create_poll":
+        await create_requested_poll(message, call[1])
+        return
+    if call and call[0] == "get_weather":
+        facts = await weather.lookup(cfg, call[1].get("city"), _parse_date(call[1].get("date"), now.date()), now.date())
+        # second request: let Gigi phrase the forecast in her own style
+        reply_msg = await ask(messages + [reply_msg, {"role": "tool", "tool_call_id": call[2], "content": facts}])
+        answer = (reply_msg or {}).get("content") or facts
+    else:
+        answer = (reply_msg or {}).get("content") or ""
+    await message.reply_text(answer.strip() or "Что-то я зависла 😵‍💫 Спроси ещё раз чуть позже.")
+
+
+def _parse_date(value, default: date) -> date:
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return default
+
+
+async def create_requested_poll(message, args: dict) -> None:
+    """A poll asked for in plain language; the LLM already extracted question and options."""
+    question = planner.truncate(str(args.get("question") or "Опрос").strip(), 300)
+    options = []
+    for option in args.get("options") or []:
+        option = planner.truncate(str(option).strip(), 100)
+        if option and option not in options:
+            options.append(option)
+    if len(options) < 2:
+        await message.reply_text("Для опроса нужно хотя бы два варианта. Перечисли их, и я всё сделаю 💅")
+        return
+    try:
+        await message.chat.send_poll(
+            question=question,
+            options=options[:10],  # Telegram's limit
+            is_anonymous=False,
+            allows_multiple_answers=bool(args.get("multiple")),
+            reply_to_message_id=message.message_id,
+        )
+    except TelegramError as e:
+        log.warning("requested poll failed: %s", e)
+        await message.reply_text("Telegram не дал создать опрос 🙄 Попробуй переформулировать.")
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -507,7 +569,8 @@ def build_app(cfg: Config) -> Application:
     app.add_handler(CommandHandler("cancel", cancel_cmd, filters.ChatType.GROUPS))
     app.add_handler(PollAnswerHandler(poll_answer))
     if cfg.llm_api_key:
-        app.add_handler(MessageHandler(filters.UpdateType.MESSAGE & filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, assistant))
+        app.add_handler(MessageHandler(filters.UpdateType.MESSAGE & filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, assistant,
+            block=False))  # LLM answers take up to a minute: don't hold up commands and votes
     app.add_error_handler(on_error)
 
     jq = app.job_queue

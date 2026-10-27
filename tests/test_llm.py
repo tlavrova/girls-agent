@@ -62,5 +62,23 @@ class CompleteTest(unittest.TestCase):
         self.assertEqual(self.run_complete(lambda m: httpx.Response(500), ["a"])[0], "")
 
 
+class ToolCallTest(unittest.TestCase):
+    def test_parses_first_valid_call(self):
+        message = {"tool_calls": [
+            {"id": "1", "function": {"name": "create_poll", "arguments": "not json"}},
+            {"id": "2", "function": {"name": "get_weather", "arguments": '{"date": "2026-10-31"}'}},
+        ]}
+        self.assertEqual(llm.tool_call(message), ("get_weather", {"date": "2026-10-31"}, "2"))
+
+    def test_none_without_calls(self):
+        self.assertIsNone(llm.tool_call({"content": "привет"}))
+
+    def test_chat_returns_tool_calls(self):
+        reply = {"content": None, "tool_calls": [{"id": "x", "function": {"name": "get_weather", "arguments": "{}"}}]}
+        transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"choices": [{"message": reply}]}))
+        message = asyncio.run(llm.chat("https://example.test", "k", ["m"], [], tools=llm.TOOLS, transport=transport))
+        self.assertEqual(llm.tool_call(message)[0], "get_weather")
+
+
 if __name__ == "__main__":
     unittest.main()
