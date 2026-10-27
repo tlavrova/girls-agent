@@ -16,7 +16,7 @@ The bot talks to the group in Russian; the code and docs are in English.
 | 4. Activity | It offers 3 options of different kinds (restaurant / party / event), preferring ideas the group saved itself, then a starter set. A second poll runs for 48 hours. |
 | 5. Agenda | The final plan is saved, pinned in the chat (if the bot is an admin), and listed by `/agenda`. |
 | 6. Good night | Every evening at 23:00 a playful good-night message from a list of 40 (`goodnight.py`), no repeats until the list runs out. Set `GOODNIGHT_TIME=off` to disable. |
-| 7. Chat | Mention Gigi or reply to one of her messages and she answers via an LLM (Google Gemini by default, free tier; any OpenAI-compatible API via `LLM_BASE_URL` / `LLM_MODELS`, a fallback list tried in order when a model is overloaded). Only that message and the one it replies to are sent, never the whole chat; at most `LLM_DAILY_LIMIT` answers per chat per day. Off unless `LLM_API_KEY` is set. |
+| 7. Chat | Mention Gigi or reply to one of her messages and she answers via an LLM (Google Gemini by default, free tier; any OpenAI-compatible API via `LLM_BASE_URL` / `LLM_MODELS`, a fallback list tried in order when a model is overloaded or out of quota; the free tier allows only a few dozen requests per model per day, so lite models with higher limits go first). Only that message and the one it replies to are sent, never the whole chat; at most `LLM_DAILY_LIMIT` answers per chat per day. Off unless `LLM_API_KEY` is set. |
 
 ### Commands
 

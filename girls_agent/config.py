@@ -23,6 +23,10 @@ def _optional_hhmm(value: str) -> Optional[tuple]:
     return None if value in ("", "off") else _hhmm(value)
 
 
+# Lite models first: on the free tier they have higher daily limits; stronger models are the fallback
+DEFAULT_LLM_MODELS = "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.5-flash,gemini-3.6-flash,gemini-3.8-flash"
+
+
 @dataclass(frozen=True)
 class Config:
     token: str
@@ -61,7 +65,7 @@ def load_config() -> Config:
         llm_api_key=os.environ.get("LLM_API_KEY") or None,
         llm_base_url=os.environ.get("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"),
         llm_models=tuple(m.strip() for m in os.environ.get(
-            "LLM_MODELS", "gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite").split(",") if m.strip()),
+            "LLM_MODELS", DEFAULT_LLM_MODELS).split(",") if m.strip()),
         llm_daily_limit=int(os.environ.get("LLM_DAILY_LIMIT", "50")),
         date_poll_days=int(os.environ.get("DATE_POLL_DAYS", "3")),
         activity_poll_hours=int(os.environ.get("ACTIVITY_POLL_HOURS", "48")),
