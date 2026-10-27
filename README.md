@@ -1,8 +1,8 @@
-# Girls Agent 💖
+# Gigi, the Girls Agent 💖
 
 [![CI](https://github.com/tlavrova/girls-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/tlavrova/girls-agent/actions/workflows/ci.yml)
 
-A Telegram bot that organizes meetups for a group of friends: it runs a monthly date poll, reminds people who haven't voted, suggests what to do, and keeps a shared agenda so plans don't get lost in the chat.
+Gigi is a Telegram bot that organizes meetups for a group of friends: it runs a monthly date poll, reminds people who haven't voted, suggests what to do, and keeps a shared agenda so plans don't get lost in the chat.
 
 The bot talks to the group in Russian; the code and docs are in English.
 
@@ -10,7 +10,7 @@ The bot talks to the group in Russian; the code and docs are in English.
 
 | Step | What happens |
 |---|---|
-| 1. Date poll | On the **last Saturday of each month** at 11:00 the bot posts a multi-choice poll with every weekend day (Sat & Sun) of next month. If a meetup for next month already exists, it skips. |
+| 1. Date poll | On the **20th of each month** at 11:00 the bot posts a multi-choice poll with every weekend day (Sat & Sun) of next month. If a meetup for next month already exists, it skips. |
 | 2. Reminders | Every day at 18:00 it mentions members who haven't voted yet. |
 | 3. Date picked | After 3 days (or on `/close`) the date with the most votes wins; ties go to the earlier date. |
 | 4. Activity | It offers 3 options of different kinds (restaurant / party / event), preferring ideas the group saved itself, then a starter set. A second poll runs for 48 hours. |
@@ -42,7 +42,7 @@ cp .env.example .env   # paste BOT_TOKEN
 python -m girls_agent.bot
 ```
 
-4. Add the bot to your group, send `/start`, then `/join`. To skip waiting until the end of the month, use `/poll`.
+4. Add the bot to your group, send `/start`, then `/join`. To skip waiting until the 20th, use `/poll`.
 
 Run the tests: `python -m unittest discover tests`
 
@@ -62,7 +62,8 @@ Notes:
 - Polls are **non-anonymous**: that's the only way Telegram tells the bot who voted, which reminders depend on.
 - Telegram doesn't give bots the member list of a group, so the bot remembers anyone who wrote, voted or sent `/join`.
 - State lives in a single SQLite file and survives restarts. Closing a poll is atomic, so a manual `/close` and the scheduled job can't both process it.
-- Everything is configurable via `.env` (see `.env.example`): time zone, meetup weekdays, poll day and time, poll durations.
+- Everything is configurable via `.env` (see `.env.example`): time zone, meetup weekdays, poll day of the month (`POLL_DAY`, 1-28) and time, poll durations.
+- On startup the bot sets its own name, profile descriptions and command menu (`set_profile` in `bot.py`), so there's nothing to fill in by hand in BotFather.
 
 ## Running 24/7
 
@@ -99,11 +100,6 @@ Only one copy of the bot can run per token: stop the local one before starting i
 Tags: `latest` for `main`, `sha-<commit>` for every build, and `1.2.3` for git tags like `v1.2.3`.
 
 To update a running server, run `deploy/setup.sh` again: it pulls the latest image and restarts the container.
-
-## Roadmap: changes to the current flow
-
-1. **Poll on the 20th**: start the date poll on the **20th of each month** (at the same time) instead of the last Saturday, still for next month's weekends. Replaces `poll_weekday` with a day-of-month setting.
-2. **New introduction**: the bot introduces itself by name, **Gigi**. Rewrite `/start` and `/help` to be shorter and warmer: who Gigi is, what she does for the group (polls, reminders, ideas, agenda, daily messages) and the main commands. Also set the bot's name, description and "about" text in BotFather.
 
 ## Roadmap: daily and weekly messages
 

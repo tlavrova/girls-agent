@@ -1,7 +1,7 @@
-"""Girls Agent: a Telegram bot that organizes meetups for a group of friends.
+"""Gigi (Girls Agent): a Telegram bot that organizes meetups for a group of friends.
 
 MVP flow:
-1. On the last Saturday of the month the bot posts a poll with next month's weekend dates
+1. On the 20th of the month the bot posts a poll with next month's weekend dates
    (unless a meetup for next month is already scheduled).
 2. Every evening it pings members who haven't voted yet.
 3. When the poll closes it fixes the date and offers 2-3 activity options in a second poll.
@@ -39,23 +39,40 @@ log = logging.getLogger("girls_agent")
 
 NONE_OPTION = "Ни одна не подходит 😢"
 
+BOT_NAME = "Gigi 💖"
+# Shown in the bot's profile and before a chat with it starts (Telegram limits: 120 and 512 chars)
+SHORT_DESCRIPTION = "Gigi — помогаю подругам собираться: даты, идеи, напоминания и общая повестка 💖"
+DESCRIPTION = (
+    "Привет, я Gigi! Помогаю вашей компании встречаться чаще и без долгих переписок: "
+    "раз в месяц спрашиваю, когда всем удобно, напоминаю тем, кто забыл проголосовать, "
+    "предлагаю, куда пойти, и записываю план, чтобы он не потерялся в чате. "
+    "Добавьте меня в групповой чат 💌"
+)
+
+# (command, description) for /help and the Telegram command menu
+COMMANDS = [
+    ("join", "я участвую, напоминай мне"),
+    ("leave", "больше не напоминать мне"),
+    ("poll", "опрос по датам прямо сейчас"),
+    ("remind", "напомнить тем, кто не проголосовал"),
+    ("close", "подвести итоги опроса досрочно"),
+    ("idea", "сохранить идею: /idea ресторан: Название, адрес"),
+    ("ideas", "банк идей"),
+    ("agenda", "ближайшие встречи"),
+    ("cancel", "отменить ближайшую встречу"),
+]
+
 HELP = (
-    "Привет! Я <b>Girls Agent</b> — помогаю нашей компании собираться 💖\n\n"
-    "<b>Как это работает</b>\n"
-    "• В последнюю субботу месяца запускаю опрос по датам на следующий месяц.\n"
-    "• Напоминаю тем, кто ещё не проголосовал.\n"
-    "• Когда дата выбрана, предлагаю 2–3 варианта досуга.\n"
-    "• Сохраняю решение в общей повестке.\n\n"
+    "Привет, я <b>Gigi</b> 💖\n"
+    "Помогаю нашей компании собираться, чтобы встречи не терялись в переписке.\n\n"
+    "<b>Что я делаю</b>\n"
+    "🗓 {poll_day}-го числа спрашиваю, в какие выходные следующего месяца всем удобно\n"
+    "🔔 Мягко напоминаю тем, кто ещё не проголосовал\n"
+    "✨ Когда дата выбрана, предлагаю 3 варианта: ресторан, вечеринка или событие\n"
+    "📒 Записываю план в общую повестку и закрепляю его в чате\n\n"
     "<b>Команды</b>\n"
-    "/join — я участвую (чтобы я знала, кому напоминать)\n"
-    "/leave — больше не напоминать мне\n"
-    "/poll — запустить опрос по датам прямо сейчас\n"
-    "/remind — напомнить тем, кто не проголосовал\n"
-    "/close — подвести итоги текущего опроса досрочно\n"
-    "/idea ресторан: Название, адрес — сохранить идею (виды: ресторан, вечеринка, мероприятие)\n"
-    "/ideas — банк идей\n"
-    "/agenda — общая повестка: ближайшие встречи\n"
-    "/cancel — отменить ближайшую встречу\n"
+    + "".join(f"/{name} — {text}\n" for name, text in COMMANDS)
+    + "\nВиды идей: ресторан, вечеринка, мероприятие."
 )
 
 
@@ -224,11 +241,9 @@ async def remind(bot: Bot, db: Database, poll, *, quiet_if_done: bool) -> None:
 # --- scheduled jobs ---
 
 async def monthly_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Runs daily but only acts on the last Saturday of the month."""
+    """Runs on POLL_DAY of every month."""
     db, cfg = _db(context), _cfg(context)
     today = datetime.now(cfg.tz).date()
-    if not planner.is_last_weekday_of_month(today, cfg.poll_weekday):
-        return
     year, month = planner.next_month(today)
     for chat_id in db.chat_ids():
         if db.open_polls(chat_id) or db.has_meeting_in_month(chat_id, year, month):
@@ -271,7 +286,7 @@ async def track_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = HELP
+    text = HELP.format(poll_day=_cfg(context).poll_day)
     if update.effective_chat.type == update.effective_chat.PRIVATE:
         text += "\n<i>Добавьте меня в групповой чат компании — там я и работаю.</i>"
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
@@ -385,8 +400,28 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # --- startup ---
 
+async def set_profile(app: Application) -> None:
+    """Keep the bot's name, descriptions and command menu in sync with the code."""
+    bot = app.bot
+    try:
+        # set_my_name is heavily rate-limited, so only call it when the name changed
+        if (await bot.get_my_name()).name != BOT_NAME:
+            await bot.set_my_name(BOT_NAME)
+        await bot.set_my_short_description(SHORT_DESCRIPTION)
+        await bot.set_my_description(DESCRIPTION)
+        await bot.set_my_commands(COMMANDS)
+    except TelegramError as e:
+        log.warning("could not update the bot profile: %s", e)
+
+
 def build_app(cfg: Config) -> Application:
-    app = Application.builder().token(cfg.token).defaults(Defaults(tzinfo=cfg.tz)).build()
+    app = (
+        Application.builder()
+        .token(cfg.token)
+        .defaults(Defaults(tzinfo=cfg.tz))
+        .post_init(set_profile)
+        .build()
+    )
     app.bot_data["db"] = Database(cfg.db_path)
     app.bot_data["cfg"] = cfg
 
@@ -405,7 +440,7 @@ def build_app(cfg: Config) -> Application:
     app.add_error_handler(on_error)
 
     jq = app.job_queue
-    jq.run_daily(monthly_job, dtime(*cfg.poll_time, tzinfo=cfg.tz), name="monthly")
+    jq.run_monthly(monthly_job, dtime(*cfg.poll_time, tzinfo=cfg.tz), day=cfg.poll_day, name="monthly")
     jq.run_daily(reminder_job, dtime(*cfg.reminder_time, tzinfo=cfg.tz), name="reminders")
     jq.run_repeating(close_due_job, interval=600, first=10, name="close_due")
     return app
@@ -418,7 +453,7 @@ def main() -> None:
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
     cfg = load_config()
     app = build_app(cfg)
-    log.info("Girls Agent started")
+    log.info("Gigi started")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

@@ -19,12 +19,6 @@ class PlannerTest(unittest.TestCase):
         self.assertEqual(len(dates), 9)
         self.assertEqual(dates[0], date(2027, 1, 1))
 
-    def test_last_saturday_of_month(self):
-        self.assertTrue(planner.is_last_weekday_of_month(date(2026, 10, 31), 5))
-        self.assertFalse(planner.is_last_weekday_of_month(date(2026, 10, 24), 5))
-        self.assertFalse(planner.is_last_weekday_of_month(date(2026, 10, 30), 5))  # Friday
-        self.assertTrue(planner.is_last_weekday_of_month(date(2026, 11, 28), 5))
-
     def test_format_date(self):
         self.assertEqual(planner.format_date(date(2026, 11, 6)), "пт, 6 ноября")
 

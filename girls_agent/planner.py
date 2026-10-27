@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import calendar
 import random
-from datetime import date, timedelta
+from datetime import date
 from typing import Iterable, List, Optional, Sequence
 
 WEEKDAYS_SHORT = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
@@ -37,11 +37,6 @@ def next_month(today: date) -> tuple:
     if today.month == 12:
         return today.year + 1, 1
     return today.year, today.month + 1
-
-
-def is_last_weekday_of_month(d: date, weekday: int) -> bool:
-    """True if d is the last given weekday of its month (e.g. the last Saturday)."""
-    return d.weekday() == weekday and (d + timedelta(days=7)).month != d.month
 
 
 def candidate_dates(today: date, weekdays: Iterable[int], limit: int = MAX_DATE_OPTIONS) -> List[date]:

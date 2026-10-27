@@ -22,7 +22,7 @@ class Config:
     tz: ZoneInfo
     db_path: str
     meeting_weekdays: tuple   # 0 = Monday … 6 = Sunday
-    poll_weekday: int         # the poll starts on the LAST such weekday of the month (5 = Saturday)
+    poll_day: int             # day of the month the poll for next month starts (1-28)
     poll_time: tuple          # (hours, minutes)
     reminder_time: tuple
     date_poll_days: int
@@ -34,12 +34,15 @@ def load_config() -> Config:
     token = os.environ.get("BOT_TOKEN")
     if not token:
         raise SystemExit("BOT_TOKEN is not set: copy .env.example to .env and paste the token from @BotFather")
+    poll_day = int(os.environ.get("POLL_DAY", "20"))
+    if not 1 <= poll_day <= 28:
+        raise SystemExit("POLL_DAY must be between 1 and 28 so it exists in every month")
     return Config(
         token=token,
         tz=ZoneInfo(os.environ.get("TIMEZONE", "Europe/Amsterdam")),
         db_path=os.environ.get("DB_PATH", "girls_agent.sqlite3"),
         meeting_weekdays=_int_list(os.environ.get("MEETING_WEEKDAYS", "5,6")),
-        poll_weekday=int(os.environ.get("POLL_WEEKDAY", "5")),
+        poll_day=poll_day,
         poll_time=_hhmm(os.environ.get("POLL_TIME", "11:00")),
         reminder_time=_hhmm(os.environ.get("REMINDER_TIME", "18:00")),
         date_poll_days=int(os.environ.get("DATE_POLL_DAYS", "3")),
