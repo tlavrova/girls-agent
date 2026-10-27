@@ -320,9 +320,9 @@ async def assistant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     # per-chat daily limit, kept in memory: a restart simply resets it
-    today = datetime.now(cfg.tz).date()
+    now = datetime.now(cfg.tz)
     counts = context.bot_data.setdefault("llm_counts", {})
-    key = (message.chat_id, today)
+    key = (message.chat_id, now.date())
     if counts.get(key, 0) >= cfg.llm_daily_limit:
         await message.reply_text("На сегодня я наболталась 🙄 Завтра продолжим.")
         return
@@ -331,15 +331,11 @@ async def assistant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply = message.reply_to_message
     replied_text = (reply.text or reply.caption) if reply else None
     messages = llm.build_messages(
-        question, today, author=display_name(update.effective_user), replied_text=replied_text,
+        question, now, author=display_name(update.effective_user), replied_text=replied_text,
         replied_is_gigi=bool(reply and reply.from_user and reply.from_user.id == bot.id),
     )
     await bot.send_chat_action(message.chat_id, ChatAction.TYPING)
-    try:
-        answer = await llm.complete(cfg.llm_base_url, cfg.llm_api_key, cfg.llm_model, messages)
-    except Exception as e:  # network, quota, bad response: never crash the handler
-        log.warning("LLM request failed: %s", e)
-        answer = ""
+    answer = await llm.complete(cfg.llm_base_url, cfg.llm_api_key, cfg.llm_models, messages)
     await message.reply_text(answer or "Что-то я зависла 😵‍💫 Спроси ещё раз чуть позже.")
 
 

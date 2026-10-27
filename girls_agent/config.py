@@ -35,7 +35,7 @@ class Config:
     goodnight_time: Optional[tuple]  # None = no good-night message
     llm_api_key: Optional[str]       # None = the chat assistant is off
     llm_base_url: str                # any OpenAI-compatible API
-    llm_model: str
+    llm_models: tuple                # tried in order until one answers
     llm_daily_limit: int             # answers per chat per day
     date_poll_days: int
     activity_poll_hours: int
@@ -60,7 +60,8 @@ def load_config() -> Config:
         goodnight_time=_optional_hhmm(os.environ.get("GOODNIGHT_TIME", "23:00")),
         llm_api_key=os.environ.get("LLM_API_KEY") or None,
         llm_base_url=os.environ.get("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"),
-        llm_model=os.environ.get("LLM_MODEL", "gemini-3.8-flash"),
+        llm_models=tuple(m.strip() for m in os.environ.get(
+            "LLM_MODELS", "gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite").split(",") if m.strip()),
         llm_daily_limit=int(os.environ.get("LLM_DAILY_LIMIT", "50")),
         date_poll_days=int(os.environ.get("DATE_POLL_DAYS", "3")),
         activity_poll_hours=int(os.environ.get("ACTIVITY_POLL_HOURS", "48")),

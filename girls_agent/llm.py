@@ -4,10 +4,13 @@ Only the question itself and the message it replies to are sent to the model, ne
 """
 from __future__ import annotations
 
-from datetime import date
-from typing import List, Optional
+import logging
+from datetime import datetime
+from typing import List, Optional, Sequence
 
 import httpx
+
+log = logging.getLogger("girls_agent")
 
 PERSONA = (
     "Ты Gigi, участница женского группового чата в Telegram. Ты помогаешь компании подруг "
@@ -17,16 +20,18 @@ PERSONA = (
     "стервозной: съязвить, закатить глаза, подколоть, но без грубости и не задевая всерьёз.\n"
     "Отвечай по-русски и коротко: обычно 1–3 предложения, без списков и заголовков, если не просят. "
     "Без Markdown. Если не знаешь ответа или нужны свежие данные (погода, новости, цены), "
-    "честно скажи, что пока так не умеешь. Сегодня {today}."
+    "честно скажи, что пока так не умеешь. Сейчас {now}."
 )
 
-TIMEOUT = 30
+WEEKDAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+
+TIMEOUT = 20  # per model; free-tier models are sometimes overloaded, so fail over quickly
 
 
-def build_messages(question: str, today: date, *, author: str = "",
+def build_messages(question: str, now: datetime, *, author: str = "",
                    replied_text: Optional[str] = None, replied_is_gigi: bool = False) -> List[dict]:
     """System prompt plus at most two messages: what she replied to (if any) and the question."""
-    messages = [{"role": "system", "content": PERSONA.format(today=today.isoformat())}]
+    messages = [{"role": "system", "content": PERSONA.format(now=f"{now:%Y-%m-%d %H:%M}, {WEEKDAYS[now.weekday()]}")}]
     if replied_text:
         if replied_is_gigi:
             messages.append({"role": "assistant", "content": replied_text})
@@ -36,15 +41,26 @@ def build_messages(question: str, today: date, *, author: str = "",
     return messages
 
 
-async def complete(base_url: str, api_key: str, model: str, messages: List[dict],
+async def complete(base_url: str, api_key: str, models: Sequence[str], messages: List[dict],
                    max_tokens: int = 1000) -> str:
-    """The model's reply; empty if it returned nothing. max_tokens is generous because
-    thinking models spend part of it before answering; brevity comes from the prompt."""
+    """The first non-empty reply, trying models in order; empty if all of them failed.
+
+    max_tokens is generous because thinking models spend part of it before answering;
+    brevity comes from the prompt.
+    """
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.post(
-            base_url.rstrip("/") + "/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={"model": model, "messages": messages, "max_tokens": max_tokens},
-        )
-        resp.raise_for_status()
-        return (resp.json()["choices"][0]["message"].get("content") or "").strip()
+        for model in models:
+            try:
+                resp = await client.post(
+                    base_url.rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={"model": model, "messages": messages, "max_tokens": max_tokens},
+                )
+                resp.raise_for_status()
+                answer = (resp.json()["choices"][0]["message"].get("content") or "").strip()
+            except (httpx.HTTPError, KeyError, IndexError, ValueError) as e:
+                log.warning("LLM %s failed: %s %s", model, type(e).__name__, e)
+                continue
+            if answer:
+                return answer
+    return ""
