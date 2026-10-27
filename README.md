@@ -110,17 +110,19 @@ To update a running server, run `deploy/setup.sh` again: it pulls the latest ima
 All times are in the configured time zone (Europe/Amsterdam by default), each message can be switched off in `.env`, and the city is configurable.
 
 1. **Weekend picks, Mondays**: every Monday a message with **3** interesting events for the coming weekend: parties, clubs, concerts, stand-up, and something for the whole family. Each with a short description, date and time, and location. Found via an LLM with web search (or an events API) and checked to fall on that weekend.
-2. **Good morning, daily at 07:00**: a greeting with a kind wish for the day plus the day's top world news in one or two sentences (from a news API or RSS feed, summarized by an LLM).
+2. **Good morning, daily at 07:00**: a greeting with a kind wish for the day, the day's top world news in one or two sentences (from a news API or RSS feed, summarized by an LLM), and the day's weather forecast in one line (Open-Meteo: temperature, rain, wind). The whole message stays short: about 3-4 lines.
 
 ## Roadmap: AI assistant
 
 Rule for everything below: Gigi only sees messages that mention her or reply to her. She never reads the whole chat, for privacy and to keep token use low.
 
-1. **Memory on request**: "@Gigi запомни, я не люблю суши" saves a short fact for that person (SQLite); "@Gigi забудь про суши" removes it, `/memory` lists what she remembers about you. When someone talks to Gigi, only their own facts are added to the prompt, and meetup suggestions skip what people dislike.
-2. **Reply threads**: follow a reply chain 3-5 messages back instead of one, so a conversation with Gigi feels natural while still never reading the rest of the chat.
-3. **Real-time weather**: "@Gigi какая погода завтра?" or "...в Роттердаме в субботу?" gets the current weather and forecast from [Open-Meteo](https://open-meteo.com) (free, no key). The default city is configurable (Amsterdam). Gigi asks the API only when the question is about weather, and the LLM phrases the answer in her style ("бери зонт, и не спорь").
-4. **Save ideas by tag**: "@Gigi сохрани идею: кафе X" (or a link) adds it to the idea bank, so nobody has to remember the `/idea` syntax.
-5. **Fresh good-night wishes**: once the LLM is connected, let it write each day's good-night message, keeping the list in `goodnight.py` as a fallback.
-6. **Links and screenshots**: extract name, address, date and price from a restaurant link, event page or screenshot.
-7. **Smarter suggestions**: factor in date, weather, budget and past meetups when picking the 2-3 options (replacing `planner.pick_ideas`).
-8. **Delegation**: "book a table for 6", "remind everyone the day before".
+1. **Wittier humor**: today's jokes feel flat. Rework the persona prompt with examples of the wanted tone (sharp, ironic, situational, never cringe or generic), forbid stock jokes (Mondays, coffee), and try a stronger model first in `LLM_MODELS`. Collect a few real answers from the chat and compare before and after.
+2. **Polls on request**: "@Gigi сделай опрос, куда пойдём в пятницу: кино, бар или боулинг" creates a Telegram poll from plain language: the LLM extracts the question, options (2-10), single or multiple choice, and an optional deadline. Gigi confirms what she understood if the request is ambiguous.
+3. **Memory on request**: "@Gigi запомни, я не люблю суши" saves a short fact for that person (SQLite); "@Gigi забудь про суши" removes it, `/memory` lists what she remembers about you. When someone talks to Gigi, only their own facts are added to the prompt, and meetup suggestions skip what people dislike.
+4. **Reply threads**: follow a reply chain 3-5 messages back instead of one, so a conversation with Gigi feels natural while still never reading the rest of the chat.
+5. **Real-time weather**: "@Gigi какая погода завтра?" or "...в Роттердаме в субботу?" gets the current weather and forecast from [Open-Meteo](https://open-meteo.com) (free, no key). The default city is configurable (Amsterdam). Gigi asks the API only when the question is about weather, and the LLM phrases the answer in her style ("бери зонт, и не спорь").
+6. **Save ideas by tag**: "@Gigi сохрани идею: кафе X" (or a link) adds it to the idea bank, so nobody has to remember the `/idea` syntax.
+7. **Fresh good-night wishes**: once the LLM is connected, let it write each day's good-night message, keeping the list in `goodnight.py` as a fallback.
+8. **Links and screenshots**: extract name, address, date and price from a restaurant link, event page or screenshot.
+9. **Smarter suggestions**: factor in date, weather, budget and past meetups when picking the 2-3 options (replacing `planner.pick_ideas`).
+10. **Delegation**: "book a table for 6", "remind everyone the day before".
