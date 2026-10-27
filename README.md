@@ -116,9 +116,11 @@ All times are in the configured time zone (Europe/Amsterdam by default), each me
 
 Rule for everything below: Gigi only sees messages that mention her or reply to her. She never reads the whole chat, for privacy and to keep token use low.
 
-1. **Weather**: let the chat assistant answer weather questions through a free weather API such as Open-Meteo.
-2. **Save ideas by tag**: "@Gigi сохрани идею: кафе X" (or a link) adds it to the idea bank, so nobody has to remember the `/idea` syntax.
-3. **Fresh good-night wishes**: once the LLM is connected, let it write each day's good-night message, keeping the list in `goodnight.py` as a fallback.
-4. **Links and screenshots**: extract name, address, date and price from a restaurant link, event page or screenshot.
-5. **Smarter suggestions**: factor in date, weather, budget and past meetups when picking the 2-3 options (replacing `planner.pick_ideas`).
-6. **Delegation**: "book a table for 6", "remind everyone the day before".
+1. **Memory on request**: "@Gigi запомни, я не люблю суши" saves a short fact for that person (SQLite); "@Gigi забудь про суши" removes it, `/memory` lists what she remembers about you. When someone talks to Gigi, only their own facts are added to the prompt, and meetup suggestions skip what people dislike.
+2. **Reply threads**: follow a reply chain 3-5 messages back instead of one, so a conversation with Gigi feels natural while still never reading the rest of the chat.
+3. **Real-time weather**: "@Gigi какая погода завтра?" or "...в Роттердаме в субботу?" gets the current weather and forecast from [Open-Meteo](https://open-meteo.com) (free, no key). The default city is configurable (Amsterdam). Gigi asks the API only when the question is about weather, and the LLM phrases the answer in her style ("бери зонт, и не спорь").
+4. **Save ideas by tag**: "@Gigi сохрани идею: кафе X" (or a link) adds it to the idea bank, so nobody has to remember the `/idea` syntax.
+5. **Fresh good-night wishes**: once the LLM is connected, let it write each day's good-night message, keeping the list in `goodnight.py` as a fallback.
+6. **Links and screenshots**: extract name, address, date and price from a restaurant link, event page or screenshot.
+7. **Smarter suggestions**: factor in date, weather, budget and past meetups when picking the 2-3 options (replacing `planner.pick_ideas`).
+8. **Delegation**: "book a table for 6", "remind everyone the day before".
