@@ -1,10 +1,10 @@
-"""SQLite storage: chats, members, polls, votes, ideas and meetings (the shared agenda)."""
+"""SQLite storage: chats, members, polls, votes, ideas, meetings (the shared agenda) and plans."""
 from __future__ import annotations
 
 import json
 import sqlite3
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS chats (
@@ -53,6 +53,17 @@ CREATE TABLE IF NOT EXISTS meetings (
     status     TEXT NOT NULL DEFAULT 'planning',  -- 'planning' | 'planned' | 'cancelled'
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS plans (           -- "запомни, в субботу в 19:00 идём в кафе X"
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id    INTEGER NOT NULL,
+    date       TEXT NOT NULL,          -- YYYY-MM-DD
+    time       TEXT,                   -- HH:MM
+    what       TEXT NOT NULL,
+    place      TEXT NOT NULL DEFAULT '',
+    who        TEXT NOT NULL DEFAULT '',
+    added_by   TEXT,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -83,6 +94,18 @@ class Database:
 
     def chat_ids(self) -> List[int]:
         return [r["chat_id"] for r in self.conn.execute("SELECT chat_id FROM chats")]
+
+    def chats(self) -> List[sqlite3.Row]:
+        return list(self.conn.execute("SELECT chat_id, title FROM chats"))
+
+    def is_member(self, user_id: int, chat_ids: Sequence[int]) -> bool:
+        """True if the user is known in any of these chats."""
+        if not chat_ids:
+            return False
+        marks = ",".join("?" * len(chat_ids))
+        return self.conn.execute(
+            f"SELECT 1 FROM members WHERE user_id = ? AND chat_id IN ({marks}) LIMIT 1",
+            (user_id, *chat_ids)).fetchone() is not None
 
     def upsert_member(self, chat_id: int, user_id: int, name: str) -> None:
         self._exec(
@@ -191,5 +214,22 @@ class Database:
     def upcoming_meetings(self, chat_id: int, from_date: str) -> List[sqlite3.Row]:
         return list(self.conn.execute(
             "SELECT * FROM meetings WHERE chat_id = ? AND status != 'cancelled' AND date >= ? ORDER BY date",
+            (chat_id, from_date),
+        ))
+
+    # --- plans (saved from chat) ---
+
+    def add_plan(self, chat_id: int, plan_date: str, what: str, *, time: Optional[str] = None,
+                 place: str = "", who: str = "", added_by: str = "") -> int:
+        cur = self._exec(
+            "INSERT INTO plans (chat_id, date, time, what, place, who, added_by, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (chat_id, plan_date, time, what, place, who, added_by, _now()),
+        )
+        return cur.lastrowid
+
+    def upcoming_plans(self, chat_id: int, from_date: str) -> List[sqlite3.Row]:
+        return list(self.conn.execute(
+            "SELECT * FROM plans WHERE chat_id = ? AND date >= ? ORDER BY date, time",
             (chat_id, from_date),
         ))

@@ -31,8 +31,13 @@ fi
 if ! sudo docker pull -q "$IMAGE"; then
     sudo docker build -q -t "$IMAGE" .
 fi
+# The group description (group.txt next to .env) is mounted read-only, so editing it needs no rebuild
+GROUP=()
+if [ -f group.txt ]; then
+    GROUP=(-v "$DIR/group.txt:/app/group.txt:ro")
+fi
 sudo docker rm -f girls-agent >/dev/null 2>&1 || true
 sudo docker run -d --name girls-agent --restart unless-stopped \
-    --env-file .env -v girls-agent-data:/data "$IMAGE"
+    --env-file .env -v girls-agent-data:/data "${GROUP[@]}" "$IMAGE"
 sleep 5
 sudo docker logs --tail 20 girls-agent

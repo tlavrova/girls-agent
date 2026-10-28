@@ -30,11 +30,27 @@ PERSONA = (
     "— Пошути что-нибудь. → Наш чат пережил три переноса встречи, два ремонта и одну свадьбу. Встречу пока не пережил.\n"
     "— Я опять опоздала. → Ты не опаздываешь, ты создаёшь ожидание. Как премьера, только без билетов.\n"
     "— Как я выгляжу? → Как человек, который знает, что выглядит хорошо, и спрашивает ради протокола.\n\n"
-    "Отвечай по-русски, 1–2 предложения, без списков и Markdown, если не просят. "
-    "Можешь создать опрос в чате и узнать прогноз погоды — для этого есть инструменты. "
+    "Серьёзный вопрос — другой режим. Если просят совета для себя или подруги, или речь о здоровье, "
+    "отношениях, работе, усталости, плохом дне, — не шути и не иронизируй вообще. Ответь тепло, простыми словами, "
+    "дай 2–3 конкретных реалистичных совета, без радикальных («уволься», «брось его»). "
+    "Ты заботливая подруга, а не психолог и не врач: если тема тяжёлая или затянулась, мягко предложи "
+    "обратиться к специалисту.\n"
+    "Пример: — Подруга выгорела на работе, что посоветовать? → Звучит очень знакомо, ей сейчас правда тяжело. "
+    "Пусть попробует хотя бы вечером не открывать рабочий чат и вернуть себе одно приятное дело в неделю — "
+    "прогулку, спорт, встречу с вами. Если сил нет уже несколько недель, стоит сходить к huisarts: "
+    "выгорание лечат, и это не слабость.\n\n"
+    "Советы давай с учётом страны и города, где живёт группа (см. «О группе»): не подставляй российские реалии "
+    "вроде бесплатных поликлиник, если речь не о России.\n\n"
+    "Отвечай по-русски, обычно 1–2 предложения, на серьёзный вопрос до 5–6; без списков и Markdown, если не просят. "
+    "Можешь создать опрос в чате, узнать прогноз погоды и записать план — для этого есть инструменты. "
+    "Просят запомнить, куда, когда или во сколько кто-то идёт, — обязательно вызови save_plan, не отвечай шуткой. "
+    "Спрашивают о планах («когда я иду в…», «какие у нас планы») — сначала факты из списка «Планы», "
+    "шутка по желанию; чего нет в списке, того ты не знаешь, так и скажи. "
     "Если нужны другие свежие данные (новости, цены), честно скажи, что пока так не умеешь. "
     "Сейчас {now}."
 )
+
+GROUP_DEFAULT = "Подруги, говорят по-русски, живут в {city}."
 
 WEEKDAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
 
@@ -45,10 +61,32 @@ QUOTA_COOLDOWN = 3600  # seconds
 _exhausted: Dict[str, float] = {}  # model -> time.monotonic() when it may be tried again
 
 
-def build_messages(question: str, now: datetime, *, author: str = "",
+def load_group(path: str, city: str) -> str:
+    """The group description from a local text file (not in git: it's about real people), or a one-line default.
+
+    Read on every call, so edits take effect without a restart.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read().strip()
+    except OSError:
+        text = ""
+    return text or GROUP_DEFAULT.format(city=city)
+
+
+def build_messages(question: str, now: datetime, *, author: str = "", group: str = "",
+                   plans: Optional[str] = None,
                    replied_text: Optional[str] = None, replied_is_gigi: bool = False) -> List[dict]:
-    """System prompt plus at most two messages: what she replied to (if any) and the question."""
-    messages = [{"role": "system", "content": PERSONA.format(now=f"{now:%Y-%m-%d %H:%M}, {WEEKDAYS[now.weekday()]}")}]
+    """System prompt plus at most two messages: what she replied to (if any) and the question.
+
+    plans is the group's upcoming plans, one per line; None leaves them out (e.g. the morning message).
+    """
+    system = PERSONA.format(now=f"{now:%Y-%m-%d %H:%M}, {WEEKDAYS[now.weekday()]}")
+    if group:
+        system += f"\n\nО группе:\n{group}"
+    if plans is not None:
+        system += f"\n\nПланы:\n{plans or 'ничего не записано'}"
+    messages = [{"role": "system", "content": system}]
     if replied_text:
         if replied_is_gigi:
             messages.append({"role": "assistant", "content": replied_text})
@@ -62,7 +100,9 @@ def build_messages(question: str, now: datetime, *, author: str = "",
 TOOLS = [
     {"type": "function", "function": {
         "name": "create_poll",
-        "description": "Создать опрос в чате, когда об этом просят.",
+        "description": ("Создать опрос в чате, когда об этом просят. Если варианты — это даты или периоды "
+                        "(«эти и следующие выходные», «на неделе»), разверни их в конкретные дни с датами, "
+                        "например «сб, 31 октября», и разреши несколько ответов."),
         "parameters": {"type": "object", "properties": {
             "question": {"type": "string", "description": "Вопрос опроса, коротко"},
             "options": {"type": "array", "items": {"type": "string"}, "description": "Варианты ответа, от 2 до 10"},
@@ -76,6 +116,17 @@ TOOLS = [
             "date": {"type": "string", "description": "Дата в формате YYYY-MM-DD"},
             "city": {"type": "string", "description": "Город, если назван; иначе не указывай"},
         }, "required": ["date"]},
+    }},
+    {"type": "function", "function": {
+        "name": "save_plan",
+        "description": "Записать план, когда просят запомнить, куда, когда или во сколько кто-то идёт.",
+        "parameters": {"type": "object", "properties": {
+            "date": {"type": "string", "description": "Дата в формате YYYY-MM-DD"},
+            "time": {"type": "string", "description": "Время HH:MM, если названо"},
+            "what": {"type": "string", "description": "Что за план, коротко: «ужин», «кино», «йога»"},
+            "place": {"type": "string", "description": "Где, если названо"},
+            "who": {"type": "string", "description": "Кто идёт, имена; «я» — это автор сообщения"},
+        }, "required": ["date", "what"]},
     }},
 ]
 

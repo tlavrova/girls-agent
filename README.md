@@ -17,7 +17,7 @@ The bot talks to the group in Russian; the code and docs are in English.
 | 5. Agenda | The final plan is saved, pinned in the chat (if the bot is an admin), and listed by `/agenda`. |
 | 6. Morning | Every day at 07:00 a short message: a wish for the day, the top world news in one sentence (BBC World RSS, picked and retold by the LLM) and the weather (Open-Meteo, free, no key). Composed once for all chats, so it costs one LLM request a day. `MORNING_TIME=off` disables it; city and feed are configurable. |
 | 7. Good night | Every evening at 23:00 a playful good-night message from a list of 40 (`goodnight.py`), no repeats until the list runs out. Set `GOODNIGHT_TIME=off` to disable. |
-| 8. Chat | Mention Gigi or reply to one of her messages and she answers via an LLM. She can also create a poll from plain language ("сделай опрос, куда идём в пятницу: кино, бар или боулинг") and tell the weather for any city up to 15 days ahead (Open-Meteo), via function calling (Google Gemini by default, free tier; any OpenAI-compatible API via `LLM_BASE_URL` / `LLM_MODELS`, a fallback list tried in order when a model is overloaded or out of quota; the free tier allows only a few dozen requests per model per day, so lite models with higher limits go first). Only that message and the one it replies to are sent, never the whole chat; at most `LLM_DAILY_LIMIT` answers per chat per day. Off unless `LLM_API_KEY` is set. |
+| 8. Chat | Mention Gigi or reply to one of her messages and she answers via an LLM. She can also save a plan ("запомни, в субботу в 19:00 идём в кафе X"; listed in `/agenda` and used to answer "какие у нас планы?" with facts), create a poll from plain language ("сделай опрос, куда идём в пятницу: кино, бар или боулинг") and tell the weather for any city up to 15 days ahead (Open-Meteo), via function calling (Google Gemini by default, free tier; any OpenAI-compatible API via `LLM_BASE_URL` / `LLM_MODELS`, a fallback list tried in order when a model is overloaded or out of quota; the free tier allows only a few dozen requests per model per day, so lite models with higher limits go first). She jokes by default but answers serious questions with care and practical advice, and knows who the group is from `group.txt` (see below). Only that message and the one it replies to are sent, never the whole chat; at most `LLM_DAILY_LIMIT` answers per chat per day. Off unless `LLM_API_KEY` is set. |
 
 ### Commands
 
@@ -29,7 +29,7 @@ The bot talks to the group in Russian; the code and docs are in English.
 | `/close` | Close the current poll early and announce the result |
 | `/idea ресторан: Name — notes` | Save an idea (kinds: `ресторан`, `вечеринка`, `мероприятие`; anything else is a generic idea) |
 | `/ideas` | List the idea bank |
-| `/agenda` | Upcoming meetups |
+| `/agenda` | Upcoming meetups and saved plans |
 | `/cancel` | Cancel the next meetup |
 
 ## Quick start
@@ -46,6 +46,7 @@ python -m girls_agent.bot
 ```
 
 4. Add the bot to your group, send `/start`, then `/join`. To skip waiting until the 20th, use `/poll`.
+5. Optional: `cp group.example.txt group.txt` and describe the group: where you live and a line about each member. Gigi adds it to every prompt, so her advice fits your life (the Netherlands, not Russia). It's about real people, so `group.txt` is in `.gitignore`; edits apply without a restart. On a server, put it next to `.env` and run `deploy/setup.sh` again to mount it.
 
 Run the tests: `python -m unittest discover tests`
 
@@ -55,7 +56,7 @@ Run the tests: `python -m unittest discover tests`
 girls_agent/
   bot.py         Telegram handlers, meetup flow, scheduled jobs
   planner.py     pure logic: dates, vote tally, idea selection (no Telegram, fully unit-tested)
-  db.py          SQLite storage: chats, members, polls, votes, ideas, meetups
+  db.py          SQLite storage: chats, members, polls, votes, ideas, meetups, plans
   config.py      settings from environment / .env
   seed_ideas.py  starter activity ideas
   goodnight.py   good-night messages
@@ -70,6 +71,7 @@ Notes:
 - Telegram doesn't give bots the member list of a group, so the bot remembers anyone who wrote, voted or sent `/join`.
 - State lives in a single SQLite file and survives restarts. Closing a poll is atomic, so a manual `/close` and the scheduled job can't both process it.
 - Everything is configurable via `.env` (see `.env.example`): time zone, meetup weekdays, poll day of the month (`POLL_DAY`, 1-28) and time, poll durations.
+- **Whitelist**: a bot with a username can't be hidden from Telegram search, but with `ALLOWED_CHATS` set it ignores strangers. Updates from other chats get no reply at all (not even `/start`), other groups are left right away, scheduled messages go only to the listed chats, and private chats work only for members of those groups. Without it, the startup log lists the known chat ids to copy. Also switch off "Allow Groups" in BotFather so nobody can add the bot anywhere.
 - On startup the bot sets its own name, profile descriptions and command menu (`set_profile` in `bot.py`), so there's nothing to fill in by hand in BotFather.
 
 ## Running 24/7
@@ -112,7 +114,20 @@ To update a running server, run `deploy/setup.sh` again: it pulls the latest ima
 
 All times are in the configured time zone (Europe/Amsterdam by default), each message can be switched off in `.env`, and the city is configurable.
 
-1. **Weekend picks, Mondays**: every Monday a message with **3** interesting events for the coming weekend: parties, clubs, concerts, stand-up, and something for the whole family. Each with a short description, date and time, and location. Found via an LLM with web search (or an events API) and checked to fall on that weekend.
+1. **Weekend picks, Fridays**: every Friday around lunch (~12:30) a short message with plans for the coming weekend, in two blocks:
+   - **For us**: 3 picks: parties, clubs, concerts, stand-up, bars.
+   - **With kids**: 2 family picks that work for children: shows, museums with kids' programs, workshops, festivals, petting farms.
+
+   Each pick has a one-line description, date and time, location and a link. The events come from real web search (see "Real places" below) and are checked to fall on that weekend, so nothing is made up.
+2. **Science and tech news in the morning**: replace the top world news with the main science and technology story (a tech or science RSS feed instead of BBC World). It doesn't have to be from today, since the day has only just started: the most notable story of the last day or two is fine.
+
+## Roadmap: real places
+
+Both features below need Gigi to find real, current places and events on the web instead of making them up. They share one component: an LLM with web search, such as Gemini's Google Search grounding (the free tier includes some searches; check whether it works through the OpenAI-compatible API or needs Gemini's native one). Every result must carry a source link, date and address.
+
+1. **Weekend picks**: the Friday message above, for adults and for families with kids.
+2. **Real meetup suggestions**: after the date poll, offer 3 real places (restaurant, bar, party or event) for that exact date and city, instead of the generic starter ideas. It factors in the weather, budget, what people dislike (see "Memory") and past meetups, and still prefers ideas the group saved itself. Replaces `planner.pick_ideas` for this step.
+3. **Official links in chat**: "@Gigi дай ссылку на сайт ресторана X" returns the real official website. Today she can't, because she has no web access.
 
 ## Roadmap: AI assistant
 
@@ -121,8 +136,7 @@ Rule for everything below: Gigi only sees messages that mention her or reply to 
 1. **Wittier humor**: today's jokes feel flat. Rework the persona prompt with examples of the wanted tone (sharp, ironic, situational, never cringe or generic), forbid stock jokes (Mondays, coffee), and try a stronger model first in `LLM_MODELS`. Collect a few real answers from the chat and compare before and after.
 2. **Memory on request**: "@Gigi запомни, я не люблю суши" saves a short fact for that person (SQLite); "@Gigi забудь про суши" removes it, `/memory` lists what she remembers about you. When someone talks to Gigi, only their own facts are added to the prompt, and meetup suggestions skip what people dislike.
 3. **Reply threads**: follow a reply chain 3-5 messages back instead of one, so a conversation with Gigi feels natural while still never reading the rest of the chat.
-4. **Save ideas by tag**: "@Gigi сохрани идею: кафе X" (or a link) adds it to the idea bank, so nobody has to remember the `/idea` syntax.
+4. **Save ideas and recommendations by tag**: when someone tags Gigi with a restaurant, place or link, she recognizes it and saves it to the idea bank without `/idea` or an explicit "сохрани" (and says she did, so it can be undone). Beyond meetup ideas, keep recommendations of any kind: cosmetics, clothes, lingerie, food, shops, doctors, with who recommended it; "@Gigi что советовали из косметики?" lists them.
 5. **Fresh good-night wishes**: once the LLM is connected, let it write each day's good-night message, keeping the list in `goodnight.py` as a fallback.
 6. **Links and screenshots**: extract name, address, date and price from a restaurant link, event page or screenshot.
-7. **Smarter suggestions**: factor in date, weather, budget and past meetups when picking the 2-3 options (replacing `planner.pick_ideas`).
-8. **Delegation**: "book a table for 6", "remind everyone the day before".
+7. **Delegation**: "book a table for 6", "remind everyone the day before".

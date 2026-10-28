@@ -26,10 +26,12 @@ from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
+    ApplicationHandlerStop,
     ContextTypes,
     Defaults,
     MessageHandler,
     PollAnswerHandler,
+    TypeHandler,
     filters,
 )
 
@@ -62,7 +64,7 @@ COMMANDS = [
     ("close", "подвести итоги опроса досрочно"),
     ("idea", "сохранить идею: /idea ресторан: Название, адрес"),
     ("ideas", "банк идей"),
-    ("agenda", "ближайшие встречи"),
+    ("agenda", "ближайшие встречи и планы"),
     ("cancel", "отменить ближайшую встречу"),
 ]
 
@@ -76,7 +78,7 @@ HELP = (
     "📒 Записываю план в общую повестку и закрепляю его в чате\n"
     "☀️ По утрам — пожелание, главная новость и погода\n"
     "🌙 Каждый вечер желаю всем спокойной ночи\n"
-    "💬 Тегни меня или ответь на моё сообщение — поболтаем. Могу сделать опрос или подсказать погоду\n\n"
+    "💬 Тегни меня или ответь на моё сообщение — поболтаем. Могу сделать опрос, подсказать погоду или запомнить план: «запомни, в субботу в 19:00 идём в кафе X»\n\n"
     "<b>Команды</b>\n"
     + "".join(f"/{name} — {text}\n" for name, text in COMMANDS)
     + "\nВиды идей: ресторан, вечеринка, мероприятие."
@@ -103,6 +105,23 @@ def display_name(user) -> str:
 
 def human_date(iso: str) -> str:
     return planner.format_date(date.fromisoformat(iso))
+
+
+def plan_line(p) -> str:
+    """One saved plan in plain text: "сб, 31 октября, 19:00 — ужин, кафе X (Таня, Аня)"."""
+    when = human_date(p["date"]) + (f", {p['time']}" if p["time"] else "")
+    line = f"{when} — {p['what']}" + (f", {p['place']}" if p["place"] else "")
+    return line + (f" ({p['who']})" if p["who"] else "")
+
+
+def plans_for_llm(db: Database, chat_id: int, today: date) -> str:
+    """Upcoming meetups and saved plans, one per line, so Gigi answers questions about plans with facts."""
+    lines = []
+    for m in db.upcoming_meetings(chat_id, today.isoformat()):
+        lines.append((m["date"], f"{human_date(m['date'])} — общая встреча: {m['activity'] or 'досуг ещё выбираем'}"))
+    for p in db.upcoming_plans(chat_id, today.isoformat()):
+        lines.append((p["date"], plan_line(p)))
+    return "\n".join(text for _, text in sorted(lines, key=lambda x: x[0]))
 
 
 # --- meetup flow ---
@@ -252,7 +271,7 @@ async def monthly_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     db, cfg = _db(context), _cfg(context)
     today = datetime.now(cfg.tz).date()
     year, month = planner.next_month(today)
-    for chat_id in db.chat_ids():
+    for chat_id in group_chats(db, cfg):
         if db.open_polls(chat_id) or db.has_meeting_in_month(chat_id, year, month):
             continue
         try:
@@ -273,7 +292,7 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def goodnight_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     db, cfg = _db(context), _cfg(context)
     today = datetime.now(cfg.tz).date()
-    for chat_id in db.chat_ids():
+    for chat_id in group_chats(db, cfg):
         try:
             await context.bot.send_message(chat_id, planner.daily_pick(GOODNIGHT, today, seed=chat_id))
         except TelegramError as e:
@@ -282,7 +301,7 @@ async def goodnight_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def morning_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     db, cfg = _db(context), _cfg(context)
-    chat_ids = db.chat_ids()
+    chat_ids = group_chats(db, cfg)
     if not chat_ids:
         return
     # composed once for all chats: one LLM request a day
@@ -301,6 +320,40 @@ async def close_due_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             await finish_poll(context.bot, db, cfg, poll)
         except TelegramError as e:
             log.warning("closing poll failed for %s: %s", poll["chat_id"], e)
+
+
+# --- access ---
+
+def group_chats(db: Database, cfg: Config) -> list:
+    """Chats the scheduled messages go to: the known ones, limited to ALLOWED_CHATS if it's set."""
+    return [c for c in db.chat_ids() if not cfg.allowed_chats or c in cfg.allowed_chats]
+
+
+def is_allowed(update: Update, db: Database, cfg: Config) -> bool:
+    """Whitelist check: allowed group chats, and private chats only with members of those groups."""
+    if not cfg.allowed_chats:
+        return True
+    chat, user = update.effective_chat, update.effective_user
+    if chat is None:
+        # poll answers carry no chat; the bot only has polls in allowed chats
+        return True
+    if chat.id in cfg.allowed_chats:
+        return True
+    return chat.type == chat.PRIVATE and user is not None and db.is_member(user.id, cfg.allowed_chats)
+
+
+async def guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Runs before every handler: strangers get no reply at all, unknown groups are left right away."""
+    if is_allowed(update, _db(context), _cfg(context)):
+        return
+    chat = update.effective_chat
+    if chat.type != chat.PRIVATE:
+        log.warning("leaving chat %s (%s): not in ALLOWED_CHATS", chat.id, chat.title)
+        try:
+            await context.bot.leave_chat(chat.id)
+        except TelegramError as e:
+            log.warning("could not leave chat %s: %s", chat.id, e)
+    raise ApplicationHandlerStop
 
 
 # --- commands ---
@@ -348,12 +401,14 @@ async def assistant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply = message.reply_to_message
     replied_text = (reply.text or reply.caption) if reply else None
     messages = llm.build_messages(
-        question, now, author=display_name(update.effective_user), replied_text=replied_text,
+        question, now, author=display_name(update.effective_user),
+        group=llm.load_group(cfg.group_file, cfg.weather_city),
+        plans=plans_for_llm(_db(context), message.chat_id, now.date()), replied_text=replied_text,
         replied_is_gigi=bool(reply and reply.from_user and reply.from_user.id == bot.id),
     )
     typing = asyncio.create_task(keep_typing(bot, message.chat_id))
     try:
-        await answer_with_llm(message, cfg, messages, now)
+        await answer_with_llm(message, _db(context), cfg, messages, now)
     finally:
         typing.cancel()
 
@@ -368,12 +423,15 @@ async def keep_typing(bot: Bot, chat_id: int) -> None:
         await asyncio.sleep(4)
 
 
-async def answer_with_llm(message, cfg: Config, messages: list, now: datetime) -> None:
+async def answer_with_llm(message, db: Database, cfg: Config, messages: list, now: datetime) -> None:
     ask = functools.partial(llm.chat, cfg.llm_base_url, cfg.llm_api_key, cfg.llm_models, tools=llm.TOOLS)
     reply_msg = await ask(messages)
     call = llm.tool_call(reply_msg) if reply_msg else None
     if call and call[0] == "create_poll":
         await create_requested_poll(message, call[1])
+        return
+    if call and call[0] == "save_plan":
+        await save_requested_plan(message, db, call[1], now.date())
         return
     if call and call[0] == "get_weather":
         facts = await weather.lookup(cfg, call[1].get("city"), _parse_date(call[1].get("date"), now.date()), now.date())
@@ -414,6 +472,32 @@ async def create_requested_poll(message, args: dict) -> None:
     except TelegramError as e:
         log.warning("requested poll failed: %s", e)
         await message.reply_text("Telegram не дал создать опрос 🙄 Попробуй переформулировать.")
+
+
+async def save_requested_plan(message, db: Database, args: dict, today: date) -> None:
+    """A plan asked to be remembered in plain language; the LLM already extracted the fields.
+
+    The confirmation is built here, not by the LLM, so it shows exactly what was saved.
+    """
+    try:
+        plan_date = date.fromisoformat(str(args.get("date")))
+    except ValueError:
+        plan_date = None
+    what = planner.truncate(str(args.get("what") or "").strip(), 100)
+    if plan_date is None or not what:
+        await message.reply_text("Не поняла, что и на какой день записать 🤔 Скажи, например: «в субботу в 19:00 ужин в кафе X».")
+        return
+    if plan_date < today:
+        await message.reply_text(f"{human_date(plan_date.isoformat())} уже прошло. Машину времени мне пока не выдали 🙃")
+        return
+    time = str(args.get("time") or "").strip()
+    time = time if re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", time) else None
+    place = planner.truncate(str(args.get("place") or "").strip(), 100)
+    who = planner.truncate(str(args.get("who") or "").strip(), 100)
+    db.add_plan(message.chat_id, plan_date.isoformat(), what, time=time, place=place, who=who,
+                added_by=display_name(message.from_user))
+    plan = {"date": plan_date.isoformat(), "time": time, "what": what, "place": place, "who": who}
+    await message.reply_text(f"Записала 📌 {plan_line(plan)}\nВсе планы — /agenda")
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -489,7 +573,8 @@ async def ideas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def agenda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     today = datetime.now(_cfg(context).tz).date().isoformat()
     meetings = _db(context).upcoming_meetings(update.effective_chat.id, today)
-    if not meetings:
+    plans = _db(context).upcoming_plans(update.effective_chat.id, today)
+    if not meetings and not plans:
         await update.effective_message.reply_text("В повестке пока пусто. Запустить опрос по датам — /poll")
         return
     lines = ["📒 <b>Общая повестка</b>"]
@@ -499,6 +584,9 @@ async def agenda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if m["details"]:
             line += f"\n    📝 {html.escape(m['details'])}"
         lines.append(line)
+    if plans:
+        lines.append("\n📌 <b>Планы</b>")
+        lines.extend(f"• {html.escape(plan_line(p))}" for p in plans)
     await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
@@ -556,6 +644,7 @@ def build_app(cfg: Config) -> Application:
     app.bot_data["db"] = Database(cfg.db_path)
     app.bot_data["cfg"] = cfg
 
+    app.add_handler(TypeHandler(Update, guard), group=-2)
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, track_chat), group=-1)
     app.add_handler(CommandHandler(["start", "help"], start_cmd))
     app.add_handler(CommandHandler("join", join_cmd, filters.ChatType.GROUPS))
@@ -591,6 +680,10 @@ def main() -> None:
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
     cfg = load_config()
     app = build_app(cfg)
+    if not cfg.allowed_chats:
+        # the ids to copy into ALLOWED_CHATS
+        chats = ", ".join(f"{c['chat_id']} ({c['title']})" for c in app.bot_data["db"].chats()) or "none yet"
+        log.warning("ALLOWED_CHATS is not set, so anyone can use the bot. Known chats: %s", chats)
     log.info("Gigi started")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 

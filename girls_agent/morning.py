@@ -66,7 +66,7 @@ async def compose(cfg, now: datetime) -> str:
     if cfg.llm_api_key and news:
         prompt = PROMPT.format(emoji=emoji, city=cfg.weather_city, weather=facts,
                                news="\n".join(f"- {h}" for h in news))
-        messages = llm.build_messages(prompt, now)
+        messages = llm.build_messages(prompt, now, group=llm.load_group(cfg.group_file, cfg.weather_city))
         answer = await llm.complete(cfg.llm_base_url, cfg.llm_api_key, cfg.llm_models, messages,
                                     timeout=LLM_TIMEOUT)
     if answer:

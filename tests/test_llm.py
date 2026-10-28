@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import tempfile
 import unittest
 from datetime import datetime
 
@@ -25,6 +27,28 @@ class BuildMessagesTest(unittest.TestCase):
         messages = llm.build_messages("что скажешь?", datetime(2026, 10, 27, 14, 30), replied_text="Идём в кино?")
         self.assertEqual(len(messages), 2)
         self.assertIn("«Идём в кино?»", messages[1]["content"])
+
+    def test_group_goes_into_system_prompt(self):
+        messages = llm.build_messages("привет", datetime(2026, 10, 27, 14, 30), group="Живём в Нидерландах.")
+        self.assertIn("О группе:\nЖивём в Нидерландах.", messages[0]["content"])
+
+
+    def test_plans_in_system_prompt_only_when_given(self):
+        now = datetime(2026, 10, 27, 14, 30)
+        self.assertNotIn("Планы:", llm.build_messages("привет", now)[0]["content"])
+        self.assertIn("Планы:\nничего не записано", llm.build_messages("привет", now, plans="")[0]["content"])
+        self.assertIn("Планы:\nсб — кино", llm.build_messages("привет", now, plans="сб — кино")[0]["content"])
+
+
+class LoadGroupTest(unittest.TestCase):
+    def test_reads_file(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as f:
+            f.write("  Подруги в Утрехте.\n")
+        self.addCleanup(os.remove, f.name)
+        self.assertEqual(llm.load_group(f.name, "Амстердам"), "Подруги в Утрехте.")
+
+    def test_missing_file_falls_back_to_city(self):
+        self.assertIn("Амстердам", llm.load_group("/nonexistent/group.txt", "Амстердам"))
 
 
 class CompleteTest(unittest.TestCase):
