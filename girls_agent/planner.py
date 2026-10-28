@@ -28,6 +28,19 @@ KIND_EMOJI = {
     "идея": "✨",
 }
 
+# Categories of recommendations (things and services, not places to go together), with their emoji
+RECOMMENDATION_EMOJI = {
+    "косметика": "💄",
+    "одежда": "👗",
+    "бельё": "👙",
+    "еда": "🥐",
+    "магазины": "🛍",
+    "красота и здоровье": "💅",
+    "дети": "🧸",
+    "дом": "🏠",
+    "другое": "💡",
+}
+
 # Telegram allows up to 10 poll options; one is reserved for "none of these work".
 MAX_DATE_OPTIONS = 9
 POLL_OPTION_MAX_LEN = 100

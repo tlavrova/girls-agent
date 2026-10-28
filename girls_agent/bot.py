@@ -68,6 +68,11 @@ COMMANDS = [
     ("close", "подвести итоги опроса досрочно"),
     ("idea", "сохранить идею: /idea ресторан: Название, адрес"),
     ("ideas", "банк идей"),
+    ("unidea", "удалить идею: /unidea 12 (номер из /ideas)"),
+    ("recs", "что советовали: косметика, одежда, еда…"),
+    ("memory", "что я о тебе помню"),
+    ("forget", "забыть факт о тебе: /forget 3 (номер из /memory)"),
+    ("unrec", "удалить совет: /unrec 5 (номер из /recs)"),
     ("agenda", "ближайшие встречи и планы"),
     ("cancel", "отменить ближайшую встречу"),
     ("unplan", "удалить план: /unplan 12 (номер из /agenda)"),
@@ -83,7 +88,7 @@ HELP = (
     "📒 Записываю план в общую повестку и закрепляю его в чате\n"
     "☀️ По утрам — пожелание, главная новость и погода\n"
     "🌙 Каждый вечер желаю всем спокойной ночи\n"
-    "💬 Тегни меня или ответь на моё сообщение — поболтаем. Могу сделать опрос, подсказать погоду или запомнить план: «запомни, в субботу в 19:00 идём в кафе X»\n\n"
+    "💬 Тегни меня или ответь на моё сообщение — поболтаем. Могу сделать опрос, подсказать погоду или запомнить план: «запомни, в субботу в 19:00 идём в кафе X». Пришли мне ресторан или совет (крем, магазин, мастер) — запишу\n\n"
     "<b>Команды</b>\n"
     + "".join(f"/{name} — {text}\n" for name, text in COMMANDS)
     + "\nВиды идей: ресторан, вечеринка, мероприятие."
@@ -415,7 +420,9 @@ async def assistant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     messages = llm.build_messages(
         question, now, author=display_name(update.effective_user),
         group=llm.load_group(cfg.group_file, cfg.weather_city),
-        plans=plans_for_llm(_db(context), message.chat_id, now.date()), replied_text=replied_text,
+        plans=plans_for_llm(_db(context), message.chat_id, now.date()),
+        facts=[f"[#{f['id']}] {f['fact']}" for f in _db(context).facts(message.chat_id, update.effective_user.id)],
+        replied_text=replied_text,
         replied_is_gigi=bool(reply and reply.from_user and reply.from_user.id == bot.id),
     )
     typing = asyncio.create_task(keep_typing(bot, message.chat_id))
@@ -444,6 +451,25 @@ async def answer_with_llm(message, db: Database, cfg: Config, messages: list, no
         return
     if call and call[0] == "save_plan":
         await save_requested_plan(message, db, call[1], now.date())
+        return
+    if call and call[0] == "save_idea":
+        await save_requested_idea(message, db, call[1])
+        return
+    if call and call[0] == "save_recommendation":
+        await save_requested_recommendation(message, db, call[1])
+        return
+    if call and call[0] == "list_recommendations":
+        await message.reply_text(recommendations_text(db, message.chat_id, call[1].get("category")),
+                                 parse_mode=ParseMode.HTML)
+        return
+    if call and call[0] == "remember_fact":
+        await remember_requested(message, db, call[1].get("fact"))
+        return
+    if call and call[0] == "forget_fact":
+        await forget_fact_requested(message, db, call[1].get("id"))
+        return
+    if call and call[0] == "forget_saved":
+        await forget_requested(message, db, call[1])
         return
     if call and call[0] == "update_plan":
         await update_requested_plan(message, db, call[1], now.date())
@@ -584,6 +610,140 @@ def _plan_id(value) -> int:
         return 0
 
 
+async def save_requested_idea(message, db: Database, args: dict) -> None:
+    """A place or event sent to Gigi without /idea; the confirmation says how to undo a wrong guess."""
+    kind = str(args.get("kind") or "").strip().lower()
+    kind = kind if kind in planner.KIND_EMOJI else "идея"
+    title = planner.truncate(str(args.get("title") or "").strip(), 100)
+    if not title:
+        await message.reply_text("Не поняла, что сохранить 🤔 Напиши название места.")
+        return
+    details = planner.truncate(str(args.get("details") or "").strip(), 300)
+    idea_id = db.add_idea(message.chat_id, kind, title, details, display_name(message.from_user))
+    await message.reply_text(f"{planner.KIND_EMOJI[kind]} Сохранила в банк идей: {title}. "
+                             f"Предложу, когда будем выбирать досуг.\nНе то? /unidea {idea_id}")
+
+
+async def save_requested_recommendation(message, db: Database, args: dict) -> None:
+    category = str(args.get("category") or "").strip().lower()
+    category = category if category in planner.RECOMMENDATION_EMOJI else "другое"
+    title = planner.truncate(str(args.get("title") or "").strip(), 100)
+    if not title:
+        await message.reply_text("Не поняла, что записать 🤔 Напиши, что именно советуешь.")
+        return
+    details = planner.truncate(str(args.get("details") or "").strip(), 300)
+    by = planner.truncate(str(args.get("recommended_by") or "").strip(), 50) or display_name(message.from_user)
+    rec_id = db.add_recommendation(message.chat_id, category, title, details, by)
+    await message.reply_text(f"{planner.RECOMMENDATION_EMOJI[category]} Записала в советы ({category}): {title}. "
+                             f"Спросишь — напомню.\nНе то? /unrec {rec_id}")
+
+
+def recommendations_text(db: Database, chat_id: int, category: Optional[str] = None) -> str:
+    """Recommendations grouped by category, as HTML."""
+    category = (category or "").strip().lower()
+    category = category if category in planner.RECOMMENDATION_EMOJI else None
+    recs = db.recommendations(chat_id, category)
+    if not recs:
+        where = f" в категории «{category}»" if category else ""
+        return f"Советов{where} пока нет. Расскажи, что нравится, — тегни меня, и я запишу 💌"
+    lines, current = [], None
+    for r in recs:
+        if r["category"] != current:
+            current = r["category"]
+            lines.append(f"\n{planner.RECOMMENDATION_EMOJI.get(current, '💡')} <b>{html.escape(current.capitalize())}</b>")
+        line = f"#{r['id']} {html.escape(r['title'])}"
+        if r["details"]:
+            line += f" — {html.escape(r['details'])}"
+        if r["recommended_by"]:
+            line += f" <i>({html.escape(r['recommended_by'])})</i>"
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+async def forget_requested(message, db: Database, args: dict) -> None:
+    """Delete an idea or recommendation by name; only an unambiguous match is deleted, otherwise list the numbers."""
+    is_idea = str(args.get("what") or "").strip().lower() != "совет"
+    query = str(args.get("title") or "").strip().lower()
+    rows = db.unused_ideas(message.chat_id) if is_idea else db.recommendations(message.chat_id)
+    found = [r for r in rows if query and (query in r["title"].lower() or r["title"].lower() in query)]
+    command, listing = ("/unidea", "/ideas") if is_idea else ("/unrec", "/recs")
+    if not found:
+        await message.reply_text(f"Не нашла такого 🤔 Посмотри в {listing} и удали по номеру: {command} номер")
+    elif len(found) > 1:
+        options = "\n".join(f"{command} {r['id']} — {r['title']}" for r in found[:10])
+        await message.reply_text(f"Нашла несколько, какое удалить?\n{options}")
+    else:
+        if is_idea:
+            db.delete_idea(message.chat_id, found[0]["id"])
+        else:
+            db.delete_recommendation(message.chat_id, found[0]["id"])
+        await message.reply_text(f"Удалила {'идею' if is_idea else 'совет'} 🗑 {found[0]['title']}")
+
+
+MAX_FACTS = 30  # per person: keeps the prompt short
+
+
+async def remember_requested(message, db: Database, fact) -> None:
+    fact = planner.truncate(str(fact or "").strip(), 150)
+    if not fact:
+        await message.reply_text("Не поняла, что запомнить 🤔")
+        return
+    if len(db.facts(message.chat_id, message.from_user.id)) >= MAX_FACTS:
+        await message.reply_text("Я уже столько про тебя помню, что пора что-то забыть 🙃 Посмотри /memory.")
+        return
+    fact_id = db.add_fact(message.chat_id, message.from_user.id, fact)
+    await message.reply_text(f"Запомнила 🧠 {fact}\nЧто я о тебе помню — /memory, забыть — /forget {fact_id}")
+
+
+async def forget_fact_requested(message, db: Database, fact_id) -> None:
+    """Forget one of the author's own facts by its number; a wrong number lists what's remembered."""
+    fact = db.delete_fact(message.chat_id, message.from_user.id, _plan_id(fact_id))
+    if fact:
+        await message.reply_text(f"Забыла 🫥 {fact['fact']}")
+        return
+    facts = db.facts(message.chat_id, message.from_user.id)
+    if not facts:
+        await message.reply_text("Я про тебя пока ничего не помню 🤷‍♀️")
+    else:
+        await message.reply_text("Не поняла, что забыть. Вот что я помню:\n"
+                                 + "\n".join(f"/forget {f['id']} — {f['fact']}" for f in facts))
+
+
+async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """What Gigi remembers about you; each person sees only their own facts."""
+    facts = _db(context).facts(update.effective_chat.id, update.effective_user.id)
+    if not facts:
+        await update.effective_message.reply_text(
+            "Я про тебя пока ничего не помню. Расскажи: «@Gigi запомни, я не ем мясо» 💌")
+        return
+    lines = ["🧠 Что я о тебе помню:"] + [f"#{f['id']} {f['fact']}" for f in facts] + ["Забыть: /forget номер"]
+    await update.effective_message.reply_text("\n".join(lines))
+
+
+async def forget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    fact = _db(context).delete_fact(update.effective_chat.id, update.effective_user.id,
+                                    _plan_id(context.args[0] if context.args else ""))
+    await update.effective_message.reply_text(
+        f"Забыла 🫥 {fact['fact']}" if fact else "Не нашла такого среди того, что я о тебе помню. Номера — в /memory.")
+
+
+async def recs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text(
+        recommendations_text(_db(context), update.effective_chat.id), parse_mode=ParseMode.HTML)
+
+
+async def unidea_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    idea = _db(context).delete_idea(update.effective_chat.id, _plan_id(context.args[0] if context.args else ""))
+    await update.effective_message.reply_text(
+        f"Удалила идею 🗑 {idea['title']}" if idea else "Не нашла такую идею 🤔 Номер есть в /ideas.")
+
+
+async def unrec_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    rec = _db(context).delete_recommendation(update.effective_chat.id, _plan_id(context.args[0] if context.args else ""))
+    await update.effective_message.reply_text(
+        f"Удалила совет 🗑 {rec['title']}" if rec else "Не нашла такой совет 🤔 Номер есть в /recs.")
+
+
 async def unplan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/unplan 12: delete a saved plan without the LLM."""
     if not context.args:
@@ -655,10 +815,11 @@ async def ideas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     lines = ["<b>Банк идей</b>"]
     for i in ideas[:30]:
-        line = f"{planner.KIND_EMOJI.get(i['kind'], '✨')} {html.escape(i['title'])}"
+        line = f"{planner.KIND_EMOJI.get(i['kind'], '✨')} #{i['id']} {html.escape(i['title'])}"
         if i["details"]:
             line += f" — {html.escape(i['details'])}"
         lines.append(line)
+    lines.append("<i>Удалить: /unidea номер</i>")
     await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
@@ -750,6 +911,11 @@ def build_app(cfg: Config) -> Application:
     app.add_handler(CommandHandler("agenda", agenda_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("cancel", cancel_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("unplan", unplan_cmd, filters.ChatType.GROUPS))
+    app.add_handler(CommandHandler("unidea", unidea_cmd, filters.ChatType.GROUPS))
+    app.add_handler(CommandHandler("recs", recs_cmd, filters.ChatType.GROUPS))
+    app.add_handler(CommandHandler("memory", memory_cmd, filters.ChatType.GROUPS))
+    app.add_handler(CommandHandler("forget", forget_cmd, filters.ChatType.GROUPS))
+    app.add_handler(CommandHandler("unrec", unrec_cmd, filters.ChatType.GROUPS))
     app.add_handler(PollAnswerHandler(poll_answer))
     if cfg.llm_api_key:
         app.add_handler(MessageHandler(filters.UpdateType.MESSAGE & filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, assistant,

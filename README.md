@@ -15,9 +15,9 @@ The bot talks to the group in Russian; the code and docs are in English.
 | 3. Date picked | After 3 days (or on `/close`) the date with the most votes wins; ties go to the earlier date. |
 | 4. Activity | It offers 3 options of different kinds (restaurant / party / event), preferring ideas the group saved itself, then a starter set. A second poll runs for 48 hours. |
 | 5. Agenda | The final plan is saved, pinned in the chat (if the bot is an admin), and listed by `/agenda`. |
-| 6. Morning | Every day at 07:00 a short message: a wish for the day, the top world news in one sentence (BBC World RSS, picked and retold by the LLM) and the weather (Open-Meteo, free, no key). Composed once for all chats, so it costs one LLM request a day. `MORNING_TIME=off` disables it; city and feed are configurable. |
+| 6. Morning | Every day at 07:00 a short message: a wish for the day, the most interesting science or tech story (BBC Science and Technology RSS, picked and retold by the LLM; it doesn't have to be from today) and the weather (Open-Meteo, free, no key). Composed once for all chats, so it costs one LLM request a day. `MORNING_TIME=off` disables it; city and feeds are configurable. |
 | 7. Good night | Every evening at 23:00 a playful good-night message from a list of 40 (`goodnight.py`), no repeats until the list runs out. Set `GOODNIGHT_TIME=off` to disable. |
-| 8. Chat | Mention Gigi or reply to one of her messages and she answers via an LLM. She can also save, move and delete plans ("запомни, в субботу в 19:00 идём в кафе X", "перенеси на 20:30", "удали кино"; listed in `/agenda` and used to answer "какие у нас планы?" with facts; she points out a clash with another plan that day, and plans are forgotten a week after their date), create a poll from plain language ("сделай опрос, куда идём в пятницу: кино, бар или боулинг") and tell the weather for any city up to 15 days ahead (Open-Meteo), via function calling (Google Gemini by default, free tier; any OpenAI-compatible API via `LLM_BASE_URL` / `LLM_MODELS`, a fallback list tried in order when a model is overloaded or out of quota; the free tier allows only a few dozen requests per model per day, so lite models with higher limits go first). She jokes by default but answers serious questions with care and practical advice, and knows who the group is from `group.txt` (see below). Only that message and the one it replies to are sent, never the whole chat; at most `LLM_DAILY_LIMIT` answers per chat per day. Off unless `LLM_API_KEY` is set. |
+| 8. Chat | Mention Gigi or reply to one of her messages and she answers via an LLM. She can also save, move and delete plans ("запомни, в субботу в 19:00 идём в кафе X", "перенеси на 20:30", "удали кино"; listed in `/agenda` and used to answer "какие у нас планы?" with facts; she points out a clash with another plan that day, and plans are forgotten a week after their date), save a place sent to her as a meetup idea (no `/idea` needed) and keep friends' recommendations of things and services (cosmetics, clothes, lingerie, food, shops, beauty, kids, home: "что советовали из косметики?"), create a poll from plain language ("сделай опрос, куда идём в пятницу: кино, бар или боулинг") and tell the weather for any city up to 15 days ahead (Open-Meteo), via function calling (Google Gemini by default, free tier; any OpenAI-compatible API via `LLM_BASE_URL` / `LLM_MODELS`, a fallback list tried in order when a model is overloaded or out of quota; the free tier allows only a few dozen requests per model per day, so lite models with higher limits go first). She remembers what people tell her about themselves ("запомни, я не люблю суши", "забудь про суши", `/memory`); only the author's own facts go into the prompt, and only facts people tell about themselves are saved. She jokes by default but answers serious questions with care and practical advice, and knows who the group is from `group.txt` (see below). Only that message and the one it replies to are sent, never the whole chat; at most `LLM_DAILY_LIMIT` answers per chat per day. Off unless `LLM_API_KEY` is set. |
 
 ### Commands
 
@@ -29,6 +29,11 @@ The bot talks to the group in Russian; the code and docs are in English.
 | `/close` | Close the current poll early and announce the result |
 | `/idea ресторан: Name — notes` | Save an idea (kinds: `ресторан`, `вечеринка`, `мероприятие`; anything else is a generic idea) |
 | `/ideas` | List the idea bank |
+| `/unidea 12` | Delete an idea |
+| `/recs` | Recommendations by category |
+| `/unrec 5` | Delete a recommendation |
+| `/memory` | What Gigi remembers about you |
+| `/forget 3` | Forget one of those facts |
 | `/agenda` | Upcoming meetups and saved plans |
 | `/cancel` | Cancel the next meetup |
 | `/unplan 12` | Delete a saved plan (number from `/agenda`) |
@@ -120,24 +125,29 @@ All times are in the configured time zone (Europe/Amsterdam by default), each me
    - **With kids**: 2 family picks that work for children: shows, museums with kids' programs, workshops, festivals, petting farms.
 
    Each pick has a one-line description, date and time, location and a link. The events come from real web search (see "Real places" below) and are checked to fall on that weekend, so nothing is made up.
-2. **Science and tech news in the morning**: replace the top world news with the main science and technology story (a tech or science RSS feed instead of BBC World). It doesn't have to be from today, since the day has only just started: the most notable story of the last day or two is fine.
 
 ## Roadmap: real places
 
-Both features below need Gigi to find real, current places and events on the web instead of making them up. They share one component: an LLM with web search, such as Gemini's Google Search grounding (the free tier includes some searches; check whether it works through the OpenAI-compatible API or needs Gemini's native one). Every result must carry a source link, date and address.
+Everything below needs Gigi to find real, current places and events on the web instead of making them up. They share one component: web search. Every result must carry a source link, date and address.
+
+Findings (2026-10-28):
+- Gemini's Google Search grounding doesn't work through the OpenAI-compatible API ("Invalid tool type"); it needs the native `generateContent` API.
+- On the free tier it isn't available for Gemini 3 models at all (HTTP 429 at once), and the 2.5 models that had free searches are closed to new keys.
+- **Option A, Gemini paid tier**: turn on billing for the key. 5,000 searches a month are free (shared across Gemini 3 models), then $14 per 1,000. Tokens are paid too (3.5 Flash-Lite: $0.30 / $2.50 per 1M input / output), which comes to cents a month for one group. Bonus: on the paid tier Google doesn't use the prompts to improve its products, which also covers `group.txt`.
+- **Option B, a separate search API** called as a function tool, keeping the free Gemini tier: Tavily (1,000 searches a month free, no card) or Brave ($5 of credit a month, about 1,000 searches, card required). Gemini then writes the answer from the results. More code, and it's one more key and service.
+- **Chosen for now: option B with Tavily**, to stay free. It needs no card, and it returns cleaned page text with URLs, made for LLMs. About 30 searches a day is plenty for one group, weekend picks included. Its key goes into the sealed secret like the others.
 
 1. **Weekend picks**: the Friday message above, for adults and for families with kids.
-2. **Real meetup suggestions**: after the date poll, offer 3 real places (restaurant, bar, party or event) for that exact date and city, instead of the generic starter ideas. It factors in the weather, budget, what people dislike (see "Memory") and past meetups, and still prefers ideas the group saved itself. Replaces `planner.pick_ideas` for this step.
-3. **Official links in chat**: "@Gigi дай ссылку на сайт ресторана X" returns the real official website. Today she can't, because she has no web access.
+2. **Real meetup suggestions**: after the date poll, offer 3 real places (restaurant, bar, party or event) for that exact date and city, instead of the generic starter ideas. It factors in the weather, budget, what people dislike (from the facts they told Gigi) and past meetups, and still prefers ideas the group saved itself. Replaces `planner.pick_ideas` for this step.
+3. **Search in chat**: "@Gigi найди итальянский ресторан в Утрехте на субботу", "что интересного в эти выходные?", "дай ссылку на сайт ресторана X", "Moeders ещё работает?". She searches the web and answers with 2-3 real options, each with an address, a link and, for events, the date. Today she answers these from the model's memory, which can be outdated or made up, and can't give links at all. A found place can be saved as an idea right away ("сохрани второй"). Searches go through the same daily limit as other answers, and the free tier's search quota needs checking.
+4. **Facts only from sources**: once search works, questions about specific places, products and opening hours ("как тебе Moeders?", "какой крем от сухости?") go through search too, so the answer rests on real reviews and current info and carries a link, instead of a confident answer from memory.
 
 ## Roadmap: AI assistant
 
 Rule for everything below: Gigi only sees messages that mention her or reply to her. She never reads the whole chat, for privacy and to keep token use low.
 
 1. **Wittier humor**: today's jokes feel flat. Rework the persona prompt with examples of the wanted tone (sharp, ironic, situational, never cringe or generic), forbid stock jokes (Mondays, coffee), and try a stronger model first in `LLM_MODELS`. Collect a few real answers from the chat and compare before and after.
-2. **Memory on request**: "@Gigi запомни, я не люблю суши" saves a short fact for that person (SQLite); "@Gigi забудь про суши" removes it, `/memory` lists what she remembers about you. When someone talks to Gigi, only their own facts are added to the prompt, and meetup suggestions skip what people dislike.
-3. **Reply threads**: follow a reply chain 3-5 messages back instead of one, so a conversation with Gigi feels natural while still never reading the rest of the chat.
-4. **Save ideas and recommendations by tag**: confirmed in testing: "запомни ресторан X" isn't understood today, only `/idea X` works. When someone tags Gigi with a restaurant, place or link, she recognizes it and saves it to the idea bank without `/idea` or an explicit "сохрани" (and says she did, so it can be undone). Beyond meetup ideas, keep recommendations of any kind: cosmetics, clothes, lingerie, food, shops, doctors, with who recommended it; "@Gigi что советовали из косметики?" lists them.
-5. **Fresh good-night wishes**: once the LLM is connected, let it write each day's good-night message, keeping the list in `goodnight.py` as a fallback.
-6. **Links and screenshots**: extract name, address, date and price from a restaurant link, event page or screenshot.
-7. **Delegation**: "book a table for 6", "remind everyone the day before".
+2. **Reply threads**: follow a reply chain 3-5 messages back instead of one, so a conversation with Gigi feels natural while still never reading the rest of the chat.
+3. **Fresh good-night wishes**: once the LLM is connected, let it write each day's good-night message, keeping the list in `goodnight.py` as a fallback.
+4. **Links and screenshots**: extract name, address, date and price from a restaurant link, event page or screenshot.
+5. **Delegation**: "book a table for 6", "remind everyone the day before".

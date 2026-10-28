@@ -158,3 +158,90 @@ class PlanEditsTest(unittest.TestCase):
 
     def test_llm_sees_plan_ids(self):
         self.assertIn(f"[#{self.dinner}] сб, 31 октября", bot.plans_for_llm(self.db, -100, self.today))
+
+
+class IdeasAndRecommendationsTest(unittest.TestCase):
+    def setUp(self):
+        self.db = Database(":memory:")
+
+    def reply(self, fn, *args, chat_id=-100):
+        message = SimpleNamespace(chat_id=chat_id, from_user=SimpleNamespace(full_name="Таня", username=None, id=1),
+                                  reply_text=AsyncMock())
+        asyncio.run(fn(message, self.db, *args))
+        return message.reply_text.call_args.args[0]
+
+    def test_idea_saved_with_undo_hint(self):
+        reply = self.reply(bot.save_requested_idea, {"kind": "ресторан", "title": "De Kas", "details": "оранжерея"})
+        idea = self.db.unused_ideas(-100)[0]
+        self.assertEqual((idea["kind"], idea["title"], idea["added_by"]), ("ресторан", "De Kas", "Таня"))
+        self.assertIn(f"/unidea {idea['id']}", reply)
+
+    def test_unknown_kind_and_category_fall_back(self):
+        self.reply(bot.save_requested_idea, {"kind": "бар", "title": "X"})
+        self.reply(bot.save_requested_recommendation, {"category": "техника", "title": "Y"})
+        self.assertEqual(self.db.unused_ideas(-100)[0]["kind"], "идея")
+        self.assertEqual(self.db.recommendations(-100)[0]["category"], "другое")
+
+    def test_recommendations_listed_by_category(self):
+        self.reply(bot.save_requested_recommendation, {"category": "косметика", "title": "Cetaphil", "recommended_by": "Аня"})
+        self.reply(bot.save_requested_recommendation, {"category": "бельё", "title": "Hunkemöller"})
+        text = bot.recommendations_text(self.db, -100, "косметика")
+        self.assertIn("Cetaphil", text)
+        self.assertIn("(Аня)", text)
+        self.assertNotIn("Hunkemöller", text)
+        self.assertIn("Hunkemöller", bot.recommendations_text(self.db, -100))
+        self.assertIn("пока нет", bot.recommendations_text(self.db, -999))
+
+    def test_forget_by_name(self):
+        self.db.add_idea(-100, "ресторан", "Караоке-бар Pijp")
+        self.assertIn("Удалила идею", self.reply(bot.forget_requested, {"what": "идея", "title": "караоке"}))
+        self.assertEqual(self.db.unused_ideas(-100), [])
+
+    def test_forget_ambiguous_lists_numbers(self):
+        a = self.db.add_idea(-100, "ресторан", "Bar Botanique")
+        b = self.db.add_idea(-100, "ресторан", "Bar Bukowski")
+        reply = self.reply(bot.forget_requested, {"what": "идея", "title": "bar"})
+        self.assertIn(f"/unidea {a}", reply)
+        self.assertIn(f"/unidea {b}", reply)
+        self.assertEqual(len(self.db.unused_ideas(-100)), 2)
+
+    def test_other_chats_are_off_limits(self):
+        rec = self.db.add_recommendation(-100, "косметика", "Cetaphil")
+        self.assertIsNone(self.db.delete_recommendation(-999, rec))
+        self.assertIn("Не нашла", self.reply(bot.forget_requested, {"what": "совет", "title": "Cetaphil"}, chat_id=-999))
+        self.assertEqual(len(self.db.recommendations(-100)), 1)
+
+
+class FactsTest(unittest.TestCase):
+    def setUp(self):
+        self.db = Database(":memory:")
+
+    def reply(self, fn, arg, user_id=1, chat_id=-100):
+        message = SimpleNamespace(chat_id=chat_id, from_user=SimpleNamespace(full_name="Таня", username=None, id=user_id),
+                                  reply_text=AsyncMock())
+        asyncio.run(fn(message, self.db, arg))
+        return message.reply_text.call_args.args[0]
+
+    def test_remember_and_forget_by_wording(self):
+        self.assertIn("/forget", self.reply(bot.remember_requested, "не любит суши"))
+        self.assertEqual([f["fact"] for f in self.db.facts(-100, 1)], ["не любит суши"])
+        self.assertIn("Забыла", self.reply(bot.forget_fact_requested, self.db.facts(-100, 1)[0]["id"]))
+        self.assertEqual(self.db.facts(-100, 1), [])
+
+    def test_facts_are_per_person_and_chat(self):
+        self.reply(bot.remember_requested, "не ест мясо", user_id=1)
+        self.assertEqual(self.db.facts(-100, 2), [])
+        self.assertEqual(self.db.facts(-999, 1), [])
+        fact_id = self.db.facts(-100, 1)[0]["id"]
+        self.assertIsNone(self.db.delete_fact(-100, 2, fact_id))  # someone else can't delete it
+        self.assertIn("ничего не помню", self.reply(bot.forget_fact_requested, fact_id, user_id=2))
+        self.assertEqual(len(self.db.facts(-100, 1)), 1)
+
+    def test_forget_unknown_lists_what_is_remembered(self):
+        self.reply(bot.remember_requested, "не любит суши")
+        self.assertIn("Вот что я помню", self.reply(bot.forget_fact_requested, 999))
+
+    def test_limit(self):
+        for i in range(bot.MAX_FACTS):
+            self.db.add_fact(-100, 1, f"факт {i}")
+        self.assertIn("пора что-то забыть", self.reply(bot.remember_requested, "ещё один"))

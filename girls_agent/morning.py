@@ -1,6 +1,6 @@
-"""Morning message: a wish for the day, the top world news and the weather, in 3-4 lines.
+"""Morning message: a wish for the day, the top science or tech story and the weather, in 3 lines.
 
-Weather comes from Open-Meteo (weather.py) and headlines from an RSS feed, both free and keyless.
+Weather comes from Open-Meteo (weather.py) and headlines from RSS feeds, both free and keyless.
 The LLM writes the message once a day and it goes to every chat, so it costs one request.
 """
 from __future__ import annotations
@@ -23,8 +23,9 @@ LLM_TIMEOUT = 90
 PROMPT = (
     "Напиши утреннее сообщение для чата подруг: ровно три строки (здесь можно длиннее обычного), без Markdown:\n"
     "1. Доброе утро и короткое пожелание на день, в твоём стиле, без банальщины.\n"
-    "2. «🌍 » и главная мировая новость дня из списка ниже, одной фразой по-русски. "
-    "Выбери самую важную; войны и трагедии пересказывай нейтрально, без шуток.\n"
+    "2. «🔬 » и самая интересная новость науки или технологий из списка ниже, одной-двумя фразами по-русски: "
+    "открытие, космос, медицина, гаджеты, ИИ — то, о чём захочется рассказать подруге. "
+    "Не обязательно сегодняшняя. Местные британские новости (погода, муниципалитеты, переработка мусора) не бери.\n"
     "3. «{emoji} {city}: » и погода из данных ниже одной строкой, можно с короткой практичной ремаркой "
     "(зонт, шарф, тёмные очки).\n\n"
     "Погода на сегодня: {weather}\n\n"
@@ -59,7 +60,7 @@ async def compose(cfg, now: datetime) -> str:
     """Today's morning message; falls back to a plain greeting with the weather if the LLM is unavailable."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         today = await weather.forecast(client, cfg.weather_lat, cfg.weather_lon, str(cfg.tz), now.date())
-        news = await fetch_headlines(client, cfg.news_feed)
+        news = [h for url in cfg.news_feeds for h in await fetch_headlines(client, url)]
     emoji, facts = today or ("🌡", "нет данных")
 
     answer = ""

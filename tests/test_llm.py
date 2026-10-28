@@ -47,6 +47,13 @@ class BuildMessagesTest(unittest.TestCase):
         self.assertEqual(len(cal), 15)
 
 
+    def test_only_given_facts_in_prompt(self):
+        now = datetime(2026, 10, 27, 14, 30)
+        system = llm.build_messages("привет", now, author="Аня", facts=["не ест мясо"])[0]["content"]
+        self.assertIn("Что Аня рассказывала о себе:\n- не ест мясо", system)
+        self.assertNotIn("рассказывала о себе:", llm.build_messages("привет", now)[0]["content"])
+
+
 class LoadGroupTest(unittest.TestCase):
     def test_reads_file(self):
         with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as f:

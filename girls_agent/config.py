@@ -23,6 +23,9 @@ def _optional_hhmm(value: str) -> Optional[tuple]:
     return None if value in ("", "off") else _hhmm(value)
 
 
+DEFAULT_NEWS_FEEDS = ("https://feeds.bbci.co.uk/news/science_and_environment/rss.xml,"
+                      "https://feeds.bbci.co.uk/news/technology/rss.xml")
+
 # Lite models first: on the free tier they have higher daily limits; stronger models are the fallback
 DEFAULT_LLM_MODELS = "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.5-flash,gemini-3.6-flash,gemini-3.8-flash"
 
@@ -41,7 +44,7 @@ class Config:
     weather_city: str                # shown in messages
     weather_lat: float
     weather_lon: float
-    news_feed: str                   # RSS feed for the morning's top news
+    news_feeds: tuple                # RSS feeds for the morning's science / tech story
     llm_api_key: Optional[str]       # None = the chat assistant is off
     llm_base_url: str                # any OpenAI-compatible API
     llm_models: tuple                # tried in order until one answers
@@ -73,7 +76,7 @@ def load_config() -> Config:
         weather_city=os.environ.get("WEATHER_CITY", "Амстердам"),
         weather_lat=float(os.environ.get("WEATHER_LAT", "52.37")),
         weather_lon=float(os.environ.get("WEATHER_LON", "4.90")),
-        news_feed=os.environ.get("NEWS_FEED", "https://feeds.bbci.co.uk/news/world/rss.xml"),
+        news_feeds=tuple(u.strip() for u in os.environ.get("NEWS_FEEDS", DEFAULT_NEWS_FEEDS).split(",") if u.strip()),
         llm_api_key=os.environ.get("LLM_API_KEY") or None,
         llm_base_url=os.environ.get("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"),
         llm_models=tuple(m.strip() for m in os.environ.get(

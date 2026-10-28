@@ -1,4 +1,4 @@
-"""SQLite storage: chats, members, polls, votes, ideas, meetings (the shared agenda) and plans."""
+"""SQLite storage: chats, members, polls, votes, ideas, meetings (the shared agenda), plans, recommendations and facts."""
 from __future__ import annotations
 
 import json
@@ -51,6 +51,22 @@ CREATE TABLE IF NOT EXISTS meetings (
     activity   TEXT,
     details    TEXT,
     status     TEXT NOT NULL DEFAULT 'planning',  -- 'planning' | 'planned' | 'cancelled'
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS recommendations (  -- things and services friends recommend; not meetup ideas
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id        INTEGER NOT NULL,
+    category       TEXT NOT NULL,
+    title          TEXT NOT NULL,
+    details        TEXT NOT NULL DEFAULT '',
+    recommended_by TEXT NOT NULL DEFAULT '',
+    created_at     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS facts (           -- "запомни, я не люблю суши": what someone told Gigi about herself
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id    INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    fact       TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS plans (           -- "запомни, в субботу в 19:00 идём в кафе X"
@@ -183,6 +199,39 @@ class Database:
     def mark_idea_used(self, idea_id: int) -> None:
         self._exec("UPDATE ideas SET used = 1 WHERE id = ?", (idea_id,))
 
+    def delete_idea(self, chat_id: int, idea_id: int) -> Optional[sqlite3.Row]:
+        """The deleted idea, or None if this chat has no such idea."""
+        row = self.conn.execute("SELECT * FROM ideas WHERE id = ? AND chat_id = ?", (idea_id, chat_id)).fetchone()
+        if row:
+            self._exec("DELETE FROM ideas WHERE id = ?", (idea_id,))
+        return row
+
+    # --- recommendations ---
+
+    def add_recommendation(self, chat_id: int, category: str, title: str, details: str = "",
+                           recommended_by: str = "") -> int:
+        cur = self._exec(
+            "INSERT INTO recommendations (chat_id, category, title, details, recommended_by, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (chat_id, category, title, details, recommended_by, _now()),
+        )
+        return cur.lastrowid
+
+    def recommendations(self, chat_id: int, category: Optional[str] = None) -> List[sqlite3.Row]:
+        if category:
+            return list(self.conn.execute(
+                "SELECT * FROM recommendations WHERE chat_id = ? AND category = ? ORDER BY id DESC",
+                (chat_id, category)))
+        return list(self.conn.execute(
+            "SELECT * FROM recommendations WHERE chat_id = ? ORDER BY category, id DESC", (chat_id,)))
+
+    def delete_recommendation(self, chat_id: int, rec_id: int) -> Optional[sqlite3.Row]:
+        row = self.conn.execute(
+            "SELECT * FROM recommendations WHERE id = ? AND chat_id = ?", (rec_id, chat_id)).fetchone()
+        if row:
+            self._exec("DELETE FROM recommendations WHERE id = ?", (rec_id,))
+        return row
+
     # --- meetings (agenda) ---
 
     def add_meeting(self, chat_id: int, meeting_date: str) -> int:
@@ -251,3 +300,22 @@ class Database:
             "SELECT * FROM plans WHERE chat_id = ? AND date >= ? ORDER BY date, time",
             (chat_id, from_date),
         ))
+
+    # --- facts about members ---
+
+    def add_fact(self, chat_id: int, user_id: int, fact: str) -> int:
+        cur = self._exec("INSERT INTO facts (chat_id, user_id, fact, created_at) VALUES (?, ?, ?, ?)",
+                         (chat_id, user_id, fact, _now()))
+        return cur.lastrowid
+
+    def facts(self, chat_id: int, user_id: int) -> List[sqlite3.Row]:
+        return list(self.conn.execute(
+            "SELECT id, fact FROM facts WHERE chat_id = ? AND user_id = ? ORDER BY id", (chat_id, user_id)))
+
+    def delete_fact(self, chat_id: int, user_id: int, fact_id: int) -> Optional[sqlite3.Row]:
+        """The deleted fact, or None: people can only delete their own facts."""
+        row = self.conn.execute("SELECT * FROM facts WHERE id = ? AND chat_id = ? AND user_id = ?",
+                                (fact_id, chat_id, user_id)).fetchone()
+        if row:
+            self._exec("DELETE FROM facts WHERE id = ?", (fact_id,))
+        return row

@@ -12,6 +12,8 @@ from typing import Dict, List, Optional, Sequence
 
 import httpx
 
+from .planner import RECOMMENDATION_EMOJI as RECOMMENDATION_CATEGORIES
+
 log = logging.getLogger("girls_agent")
 
 PERSONA = (
@@ -47,6 +49,19 @@ PERSONA = (
     "Просят удалить, отменить, перенести или поправить план — вызови delete_plan или update_plan с его номером "
     "из списка «Планы». Номер бери только у того самого плана; если подходящего плана с номером нет "
     "(например, это общая встреча), ничего не вызывай, а скажи, что общую встречу отменяют командой /cancel. "
+    "Прислали место, куда можно сходить вместе (ресторан, кафе, бар, вечеринку, выставку, концерт) или ссылку на него, "
+    "даже без слов «запомни» и без вопроса, — сохрани через save_idea. "
+    "Советуют вещь или услугу (косметику, одежду, бельё, еду, магазин, мастера, врача) — save_recommendation; "
+    "спрашивают, что советовали, — list_recommendations. Просят удалить идею или совет — forget_saved. Если спрашивают твоё мнение о месте, просто ответь, не сохраняй. "
+    "Человек рассказывает о себе что-то, что стоит помнить (вкусы, аллергии, что не любит, дети, привычки), "
+    "или прямо просит запомнить о себе — remember_fact; просит забыть или говорит, что это уже не так, — "
+    "forget_fact с номером из списка «рассказывала о себе». "
+    "Запоминаешь только то, что человек говорит о себе. Про других («запомни, Аня не ест мясо») ничего не сохраняй "
+    "и ответь, что запомнишь, когда Аня скажет это сама. "
+    "Никогда не пиши «запомнила», «записала», «удалила» сама: это делают только инструменты, "
+    "и подтверждение пришлёт бот. Без вызова инструмента ничего не сохраняется. "
+    "То, что ты знаешь об авторе, учитывай в советах, но не пересказывай без повода. "
+    "Погоду никогда не выдумывай: если она важна для ответа, узнай через get_weather или не упоминай. "
     "Даты бери из «Календаря», не высчитывай сама: «в субботу» — ближайшая суббота оттуда. "
     "Спрашивают о планах («когда я иду в…», «какие у нас планы») — сначала факты из списка «Планы», "
     "шутка по желанию; чего нет в списке, того ты не знаешь, так и скажи. "
@@ -89,7 +104,7 @@ def load_group(path: str, city: str) -> str:
 
 
 def build_messages(question: str, now: datetime, *, author: str = "", group: str = "",
-                   plans: Optional[str] = None,
+                   plans: Optional[str] = None, facts: Sequence[str] = (),
                    replied_text: Optional[str] = None, replied_is_gigi: bool = False) -> List[dict]:
     """System prompt plus at most two messages: what she replied to (if any) and the question.
 
@@ -100,6 +115,10 @@ def build_messages(question: str, now: datetime, *, author: str = "", group: str
         system += f"\n\nО группе:\n{group}"
     if plans is not None:
         system += f"\n\nПланы:\n{plans or 'ничего не записано'}"
+    if facts:
+        # only the author's own facts: nobody else's are ever sent along
+        system += f"\n\nЧто {author or 'автор'} рассказывала о себе:\n" + "\n".join(f"- {f}" for f in facts)
+        system += "\nУчитывай это в советах: куда сходить, что поесть, чем заняться."
     messages = [{"role": "system", "content": system}]
     if replied_text:
         if replied_is_gigi:
@@ -141,6 +160,57 @@ TOOLS = [
             "place": {"type": "string", "description": "Где, если названо"},
             "who": {"type": "string", "description": "Кто идёт, имена; «я» — это автор сообщения"},
         }, "required": ["date", "what"]},
+    }},
+    {"type": "function", "function": {
+        "name": "save_idea",
+        "description": ("Сохранить в банк идей место или событие, куда можно сходить всей компанией: "
+                        "ресторан, бар, вечеринку, выставку, концерт. Ссылку клади в details."),
+        "parameters": {"type": "object", "properties": {
+            "kind": {"type": "string", "enum": ["ресторан", "вечеринка", "мероприятие", "идея"],
+                     "description": "ресторан — кафе, бары, рестораны; мероприятие — концерты, выставки, спектакли"},
+            "title": {"type": "string", "description": "Название, коротко"},
+            "details": {"type": "string", "description": "Адрес, ссылка, кухня, цена — что назвали"},
+        }, "required": ["kind", "title"]},
+    }},
+    {"type": "function", "function": {
+        "name": "save_recommendation",
+        "description": "Записать рекомендацию вещи или услуги: косметика, одежда, бельё, еда, магазин, мастер, врач.",
+        "parameters": {"type": "object", "properties": {
+            "category": {"type": "string", "enum": list(RECOMMENDATION_CATEGORIES)},
+            "title": {"type": "string", "description": "Что именно, коротко: бренд, товар, магазин, мастер"},
+            "details": {"type": "string", "description": "Подробности: чем хорошо, где купить, цена, ссылка"},
+            "recommended_by": {"type": "string", "description": "Кто советует; если сам автор — его имя"},
+        }, "required": ["category", "title"]},
+    }},
+    {"type": "function", "function": {
+        "name": "list_recommendations",
+        "description": "Показать, что подруги советовали, когда об этом спрашивают.",
+        "parameters": {"type": "object", "properties": {
+            "category": {"type": "string", "enum": list(RECOMMENDATION_CATEGORIES),
+                         "description": "Категория; не указывай, если спрашивают про всё"},
+        }},
+    }},
+    {"type": "function", "function": {
+        "name": "forget_saved",
+        "description": "Удалить сохранённую идею или совет, когда об этом просят.",
+        "parameters": {"type": "object", "properties": {
+            "what": {"type": "string", "enum": ["идея", "совет"]},
+            "title": {"type": "string", "description": "Название или его часть, как его назвали"},
+        }, "required": ["what", "title"]},
+    }},
+    {"type": "function", "function": {
+        "name": "remember_fact",
+        "description": "Запомнить то, что автор сообщения рассказала о себе: вкусы, аллергии, что не любит, дети, привычки.",
+        "parameters": {"type": "object", "properties": {
+            "fact": {"type": "string", "description": "Факт коротко, в третьем лице без имени: «не любит суши», «двое детей, 5 и 8 лет»"},
+        }, "required": ["fact"]},
+    }},
+    {"type": "function", "function": {
+        "name": "forget_fact",
+        "description": "Забыть то, что автор рассказывала о себе, когда она просит или говорит, что это уже не так.",
+        "parameters": {"type": "object", "properties": {
+            "id": {"type": "integer", "description": "Номер факта, например 3 для [#3]"},
+        }, "required": ["id"]},
     }},
     {"type": "function", "function": {
         "name": "delete_plan",
