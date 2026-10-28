@@ -40,6 +40,13 @@ class BuildMessagesTest(unittest.TestCase):
         self.assertIn("Планы:\nсб — кино", llm.build_messages("привет", now, plans="сб — кино")[0]["content"])
 
 
+    def test_calendar_lists_weekdays_from_today(self):
+        cal = llm.calendar(datetime(2026, 10, 28, 9, 0)).splitlines()
+        self.assertEqual(cal[1], "среда — 2026-10-28 (сегодня)")
+        self.assertIn("суббота — 2026-10-31", cal)
+        self.assertEqual(len(cal), 15)
+
+
 class LoadGroupTest(unittest.TestCase):
     def test_reads_file(self):
         with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as f:

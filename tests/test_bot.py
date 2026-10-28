@@ -112,4 +112,49 @@ class PlansTest(unittest.TestCase):
         self.db.set_meeting_plan(meeting, "боулинг", "")
         self.db.add_plan(-100, "2026-10-20", "прошлое")
         lines = bot.plans_for_llm(self.db, -100, self.today).splitlines()
-        self.assertEqual(lines, ["вс, 1 ноября — общая встреча: боулинг", "сб, 7 ноября — йога"])
+        self.assertEqual(lines, ["[общая встреча, без номера] вс, 1 ноября — боулинг", "[#1] сб, 7 ноября — йога"])
+
+
+class PlanEditsTest(unittest.TestCase):
+    def setUp(self):
+        self.db = Database(":memory:")
+        self.today = date(2026, 10, 28)
+        self.dinner = self.db.add_plan(-100, "2026-10-31", "ужин", time="19:00", place="Moeders")
+
+    def run_reply(self, coro_fn, *args, chat_id=-100):
+        message = SimpleNamespace(chat_id=chat_id, from_user=SimpleNamespace(full_name="Таня", username=None, id=1),
+                                  reply_text=AsyncMock())
+        asyncio.run(coro_fn(message, self.db, *args))
+        return message.reply_text.call_args.args[0]
+
+    def test_clash_is_reported_but_saved(self):
+        reply = self.run_reply(bot.save_requested_plan, {"date": "2026-10-31", "time": "20:00", "what": "бар"}, self.today)
+        self.assertIn("уже записано: сб, 31 октября, 19:00 — ужин, Moeders", reply)
+        self.assertEqual(len(self.db.upcoming_plans(-100, "2026-10-28")), 2)
+
+    def test_no_clash_far_apart_or_other_day(self):
+        for args in ({"date": "2026-10-31", "time": "12:00", "what": "бранч"}, {"date": "2026-11-01", "what": "кино"}):
+            self.assertNotIn("уже записано", self.run_reply(bot.save_requested_plan, args, self.today))
+
+    def test_update_changes_only_given_fields(self):
+        reply = self.run_reply(bot.update_requested_plan, {"id": self.dinner, "time": "20:30", "place": ""}, self.today)
+        self.assertIn("сб, 31 октября, 20:30 — ужин, Moeders", reply)
+
+    def test_delete(self):
+        reply = self.run_reply(bot.delete_requested_plan, f"#{self.dinner}")
+        self.assertIn("Удалила", reply)
+        self.assertEqual(self.db.upcoming_plans(-100, "2026-10-28"), [])
+
+    def test_other_chats_plans_are_off_limits(self):
+        self.assertIn("Не нашла", self.run_reply(bot.delete_requested_plan, self.dinner, chat_id=-999))
+        self.assertIn("Не нашла", self.run_reply(bot.update_requested_plan, {"id": self.dinner, "time": "10:00"},
+                                                 self.today, chat_id=-999))
+        self.assertEqual(len(self.db.upcoming_plans(-100, "2026-10-28")), 1)
+
+    def test_old_plans_are_forgotten(self):
+        self.db.add_plan(-100, "2026-10-01", "старое")
+        self.assertEqual(self.db.delete_plans_before("2026-10-21"), 1)
+        self.assertEqual(len(self.db.upcoming_plans(-100, "2000-01-01")), 1)
+
+    def test_llm_sees_plan_ids(self):
+        self.assertIn(f"[#{self.dinner}] сб, 31 октября", bot.plans_for_llm(self.db, -100, self.today))

@@ -228,6 +228,24 @@ class Database:
         )
         return cur.lastrowid
 
+    def get_plan(self, chat_id: int, plan_id: int) -> Optional[sqlite3.Row]:
+        """The plan, only if it belongs to this chat."""
+        return self.conn.execute("SELECT * FROM plans WHERE id = ? AND chat_id = ?", (plan_id, chat_id)).fetchone()
+
+    def update_plan(self, chat_id: int, plan_id: int, plan_date: str, what: str, *, time: Optional[str],
+                    place: str, who: str) -> None:
+        self._exec(
+            "UPDATE plans SET date = ?, time = ?, what = ?, place = ?, who = ? WHERE id = ? AND chat_id = ?",
+            (plan_date, time, what, place, who, plan_id, chat_id),
+        )
+
+    def delete_plan(self, chat_id: int, plan_id: int) -> bool:
+        return self._exec("DELETE FROM plans WHERE id = ? AND chat_id = ?", (plan_id, chat_id)).rowcount > 0
+
+    def delete_plans_before(self, before_date: str) -> int:
+        """Forget plans that are long past: nothing about where people went is kept longer than needed."""
+        return self._exec("DELETE FROM plans WHERE date < ?", (before_date,)).rowcount
+
     def upcoming_plans(self, chat_id: int, from_date: str) -> List[sqlite3.Row]:
         return list(self.conn.execute(
             "SELECT * FROM plans WHERE chat_id = ? AND date >= ? ORDER BY date, time",

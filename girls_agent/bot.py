@@ -19,6 +19,7 @@ import logging
 import random
 import re
 from datetime import date, datetime, time as dtime, timedelta, timezone
+from typing import Optional
 
 from telegram import Bot, Update
 from telegram.constants import ChatAction, MessageEntityType, ParseMode
@@ -55,6 +56,9 @@ DESCRIPTION = (
     "Добавьте меня в групповой чат 💌"
 )
 
+# Plans are deleted this many days after their date
+PLAN_RETENTION_DAYS = 7
+
 # (command, description) for /help and the Telegram command menu
 COMMANDS = [
     ("join", "я участвую, напоминай мне"),
@@ -66,6 +70,7 @@ COMMANDS = [
     ("ideas", "банк идей"),
     ("agenda", "ближайшие встречи и планы"),
     ("cancel", "отменить ближайшую встречу"),
+    ("unplan", "удалить план: /unplan 12 (номер из /agenda)"),
 ]
 
 HELP = (
@@ -118,9 +123,9 @@ def plans_for_llm(db: Database, chat_id: int, today: date) -> str:
     """Upcoming meetups and saved plans, one per line, so Gigi answers questions about plans with facts."""
     lines = []
     for m in db.upcoming_meetings(chat_id, today.isoformat()):
-        lines.append((m["date"], f"{human_date(m['date'])} — общая встреча: {m['activity'] or 'досуг ещё выбираем'}"))
+        lines.append((m["date"], f"[общая встреча, без номера] {human_date(m['date'])} — {m['activity'] or 'досуг ещё выбираем'}"))
     for p in db.upcoming_plans(chat_id, today.isoformat()):
-        lines.append((p["date"], plan_line(p)))
+        lines.append((p["date"], f"[#{p['id']}] {plan_line(p)}"))
     return "\n".join(text for _, text in sorted(lines, key=lambda x: x[0]))
 
 
@@ -313,6 +318,13 @@ async def morning_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             log.warning("morning message failed for %s: %s", chat_id, e)
 
 
+async def forget_old_plans_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    cutoff = datetime.now(_cfg(context).tz).date() - timedelta(days=PLAN_RETENTION_DAYS)
+    removed = _db(context).delete_plans_before(cutoff.isoformat())
+    if removed:
+        log.info("forgot %d plans from before %s", removed, cutoff)
+
+
 async def close_due_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     db, cfg = _db(context), _cfg(context)
     for poll in db.due_polls(datetime.now(timezone.utc)):
@@ -433,6 +445,12 @@ async def answer_with_llm(message, db: Database, cfg: Config, messages: list, no
     if call and call[0] == "save_plan":
         await save_requested_plan(message, db, call[1], now.date())
         return
+    if call and call[0] == "update_plan":
+        await update_requested_plan(message, db, call[1], now.date())
+        return
+    if call and call[0] == "delete_plan":
+        await delete_requested_plan(message, db, call[1].get("id"))
+        return
     if call and call[0] == "get_weather":
         facts = await weather.lookup(cfg, call[1].get("city"), _parse_date(call[1].get("date"), now.date()), now.date())
         # second request: let Gigi phrase the forecast in her own style
@@ -474,30 +492,104 @@ async def create_requested_poll(message, args: dict) -> None:
         await message.reply_text("Telegram не дал создать опрос 🙄 Попробуй переформулировать.")
 
 
-async def save_requested_plan(message, db: Database, args: dict, today: date) -> None:
-    """A plan asked to be remembered in plain language; the LLM already extracted the fields.
+TIME_RE = re.compile(r"([01]?\d|2[0-3]):[0-5]\d")
+OVERLAP = timedelta(hours=2)  # plans this close on the same day probably clash
 
-    The confirmation is built here, not by the LLM, so it shows exactly what was saved.
-    """
+
+def clean_plan(args: dict, today: date):
+    """Validated plan fields from LLM arguments, or (None, a reply explaining what's wrong)."""
     try:
         plan_date = date.fromisoformat(str(args.get("date")))
     except ValueError:
         plan_date = None
     what = planner.truncate(str(args.get("what") or "").strip(), 100)
     if plan_date is None or not what:
-        await message.reply_text("Не поняла, что и на какой день записать 🤔 Скажи, например: «в субботу в 19:00 ужин в кафе X».")
-        return
+        return None, "Не поняла, что и на какой день записать 🤔 Скажи, например: «в субботу в 19:00 ужин в кафе X»."
     if plan_date < today:
-        await message.reply_text(f"{human_date(plan_date.isoformat())} уже прошло. Машину времени мне пока не выдали 🙃")
-        return
+        return None, f"{human_date(plan_date.isoformat())} уже прошло. Машину времени мне пока не выдали 🙃"
     time = str(args.get("time") or "").strip()
-    time = time if re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", time) else None
-    place = planner.truncate(str(args.get("place") or "").strip(), 100)
-    who = planner.truncate(str(args.get("who") or "").strip(), 100)
-    db.add_plan(message.chat_id, plan_date.isoformat(), what, time=time, place=place, who=who,
-                added_by=display_name(message.from_user))
-    plan = {"date": plan_date.isoformat(), "time": time, "what": what, "place": place, "who": who}
-    await message.reply_text(f"Записала 📌 {plan_line(plan)}\nВсе планы — /agenda")
+    return {
+        "date": plan_date.isoformat(),
+        "time": time if TIME_RE.fullmatch(time) else None,
+        "what": what,
+        "place": planner.truncate(str(args.get("place") or "").strip(), 100),
+        "who": planner.truncate(str(args.get("who") or "").strip(), 100),
+    }, ""
+
+
+def clashes(db: Database, chat_id: int, plan: dict, skip_id: Optional[int] = None) -> list:
+    """Saved plans on the same day within OVERLAP of this one; a plan without a time clashes with the whole day."""
+    found = []
+    for p in db.upcoming_plans(chat_id, plan["date"]):
+        if p["date"] != plan["date"] or p["id"] == skip_id:
+            continue
+        if not p["time"] or not plan["time"] or abs(
+                datetime.strptime(p["time"], "%H:%M") - datetime.strptime(plan["time"], "%H:%M")) < OVERLAP:
+            found.append(p)
+    return found
+
+
+def clash_note(found: list) -> str:
+    if not found:
+        return ""
+    names = "; ".join(plan_line(p) for p in found)
+    return f"\n⚠️ На это время уже записано: {names}. Оставить оба или заменить? Скажи «@Gigi удали …», если старое не нужно."
+
+
+async def save_requested_plan(message, db: Database, args: dict, today: date) -> None:
+    """A plan asked to be remembered in plain language; the LLM already extracted the fields.
+
+    The confirmation is built here, not by the LLM, so it shows exactly what was saved.
+    A clash with another plan is pointed out, not blocked: dinner and then a bar is a normal evening.
+    """
+    plan, error = clean_plan(args, today)
+    if not plan:
+        await message.reply_text(error)
+        return
+    found = clashes(db, message.chat_id, plan)
+    db.add_plan(message.chat_id, plan["date"], plan["what"], time=plan["time"], place=plan["place"],
+                who=plan["who"], added_by=display_name(message.from_user))
+    await message.reply_text(f"Записала 📌 {plan_line(plan)}{clash_note(found)}\nВсе планы — /agenda")
+
+
+async def update_requested_plan(message, db: Database, args: dict, today: date) -> None:
+    """Move or fix a saved plan: only the fields the LLM gave change."""
+    old = db.get_plan(message.chat_id, _plan_id(args.get("id")))
+    if not old:
+        await message.reply_text("Не нашла такой план 🤔 Посмотри номера в /agenda.")
+        return
+    changes = {k: v for k, v in args.items() if k in ("date", "time", "what", "place", "who") and v not in (None, "")}
+    plan, error = clean_plan({**dict(old), **changes}, today)
+    if not plan:
+        await message.reply_text(error)
+        return
+    db.update_plan(message.chat_id, old["id"], plan["date"], plan["what"], time=plan["time"],
+                   place=plan["place"], who=plan["who"])
+    found = clashes(db, message.chat_id, plan, skip_id=old["id"])
+    await message.reply_text(f"Поправила ✏️ {plan_line(plan)}{clash_note(found)}")
+
+
+async def delete_requested_plan(message, db: Database, plan_id) -> None:
+    plan = db.get_plan(message.chat_id, _plan_id(plan_id))
+    if not plan or not db.delete_plan(message.chat_id, plan["id"]):
+        await message.reply_text("Не нашла такой план 🤔 Посмотри номера в /agenda.")
+        return
+    await message.reply_text(f"Удалила 🗑 {plan_line(plan)}")
+
+
+def _plan_id(value) -> int:
+    try:
+        return int(str(value).lstrip("#"))
+    except ValueError:
+        return 0
+
+
+async def unplan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/unplan 12: delete a saved plan without the LLM."""
+    if not context.args:
+        await update.effective_message.reply_text("Напиши номер плана из /agenda, например: /unplan 12")
+        return
+    await delete_requested_plan(update.effective_message, _db(context), context.args[0])
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -586,7 +678,8 @@ async def agenda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         lines.append(line)
     if plans:
         lines.append("\n📌 <b>Планы</b>")
-        lines.extend(f"• {html.escape(plan_line(p))}" for p in plans)
+        lines.extend(f"#{p['id']} {html.escape(plan_line(p))}" for p in plans)
+        lines.append("<i>Удалить: /unplan номер</i>")
     await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
@@ -656,6 +749,7 @@ def build_app(cfg: Config) -> Application:
     app.add_handler(CommandHandler("ideas", ideas_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("agenda", agenda_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("cancel", cancel_cmd, filters.ChatType.GROUPS))
+    app.add_handler(CommandHandler("unplan", unplan_cmd, filters.ChatType.GROUPS))
     app.add_handler(PollAnswerHandler(poll_answer))
     if cfg.llm_api_key:
         app.add_handler(MessageHandler(filters.UpdateType.MESSAGE & filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, assistant,
@@ -670,6 +764,7 @@ def build_app(cfg: Config) -> Application:
     if cfg.goodnight_time:
         jq.run_daily(goodnight_job, dtime(*cfg.goodnight_time, tzinfo=cfg.tz), name="goodnight")
     jq.run_repeating(close_due_job, interval=600, first=10, name="close_due")
+    jq.run_daily(forget_old_plans_job, dtime(4, 0, tzinfo=cfg.tz), name="forget_old_plans")
     return app
 
 

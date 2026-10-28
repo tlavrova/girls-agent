@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Sequence
 
 import httpx
@@ -44,6 +44,10 @@ PERSONA = (
     "Отвечай по-русски, обычно 1–2 предложения, на серьёзный вопрос до 5–6; без списков и Markdown, если не просят. "
     "Можешь создать опрос в чате, узнать прогноз погоды и записать план — для этого есть инструменты. "
     "Просят запомнить, куда, когда или во сколько кто-то идёт, — обязательно вызови save_plan, не отвечай шуткой. "
+    "Просят удалить, отменить, перенести или поправить план — вызови delete_plan или update_plan с его номером "
+    "из списка «Планы». Номер бери только у того самого плана; если подходящего плана с номером нет "
+    "(например, это общая встреча), ничего не вызывай, а скажи, что общую встречу отменяют командой /cancel. "
+    "Даты бери из «Календаря», не высчитывай сама: «в субботу» — ближайшая суббота оттуда. "
     "Спрашивают о планах («когда я иду в…», «какие у нас планы») — сначала факты из списка «Планы», "
     "шутка по желанию; чего нет в списке, того ты не знаешь, так и скажи. "
     "Если нужны другие свежие данные (новости, цены), честно скажи, что пока так не умеешь. "
@@ -59,6 +63,16 @@ TIMEOUT = 45  # per model; free-tier lite models often take 20-40 s, overloaded 
 # instead of costing every answer a wasted request
 QUOTA_COOLDOWN = 3600  # seconds
 _exhausted: Dict[str, float] = {}  # model -> time.monotonic() when it may be tried again
+
+
+def calendar(now: datetime, days: int = 14) -> str:
+    """The next two weeks with weekdays, so the model looks dates up instead of counting (it miscounts)."""
+    lines = ["Календарь:"]
+    for i in range(days):
+        d = now.date() + timedelta(days=i)
+        label = " (сегодня)" if i == 0 else " (завтра)" if i == 1 else ""
+        lines.append(f"{WEEKDAYS[d.weekday()]} — {d.isoformat()}{label}")
+    return "\n".join(lines)
 
 
 def load_group(path: str, city: str) -> str:
@@ -81,7 +95,7 @@ def build_messages(question: str, now: datetime, *, author: str = "", group: str
 
     plans is the group's upcoming plans, one per line; None leaves them out (e.g. the morning message).
     """
-    system = PERSONA.format(now=f"{now:%Y-%m-%d %H:%M}, {WEEKDAYS[now.weekday()]}")
+    system = PERSONA.format(now=f"{now:%Y-%m-%d %H:%M}, {WEEKDAYS[now.weekday()]}") + "\n\n" + calendar(now)
     if group:
         system += f"\n\nО группе:\n{group}"
     if plans is not None:
@@ -127,6 +141,26 @@ TOOLS = [
             "place": {"type": "string", "description": "Где, если названо"},
             "who": {"type": "string", "description": "Кто идёт, имена; «я» — это автор сообщения"},
         }, "required": ["date", "what"]},
+    }},
+    {"type": "function", "function": {
+        "name": "delete_plan",
+        "description": ("Удалить или отменить записанный план с номером [#N], когда об этом просят. "
+                        "Общие встречи без номера так не удаляются."),
+        "parameters": {"type": "object", "properties": {
+            "id": {"type": "integer", "description": "Номер плана из списка «Планы», например 12 для [#12]"},
+        }, "required": ["id"]},
+    }},
+    {"type": "function", "function": {
+        "name": "update_plan",
+        "description": "Перенести или поправить записанный план. Указывай только то, что меняется.",
+        "parameters": {"type": "object", "properties": {
+            "id": {"type": "integer", "description": "Номер плана из списка «Планы»"},
+            "date": {"type": "string", "description": "Новая дата YYYY-MM-DD"},
+            "time": {"type": "string", "description": "Новое время HH:MM"},
+            "what": {"type": "string", "description": "Что за план"},
+            "place": {"type": "string", "description": "Где"},
+            "who": {"type": "string", "description": "Кто идёт"},
+        }, "required": ["id"]},
     }},
 ]
 
