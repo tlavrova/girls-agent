@@ -520,6 +520,24 @@ async def create_requested_poll(message, args: dict) -> None:
 
 TIME_RE = re.compile(r"([01]?\d|2[0-3]):[0-5]\d")
 OVERLAP = timedelta(hours=2)  # plans this close on the same day probably clash
+WHO_SPLIT_RE = re.compile(r"\s*(?:,|\bи\b|\bсо?\b)\s*", re.IGNORECASE)
+SELF_WORDS = {"я", "меня", "мне", "мной", "мы", "нас"}  # the LLM sometimes keeps these instead of the author's name
+
+
+def name_people(who: str, author: str) -> str:
+    """ "я, Аня" -> "Таня, Аня": in the group's plan list "я" means nothing, so it becomes the author's name.
+
+    Left as is when there's no such word, so "Аня и её муж" isn't mangled.
+    """
+    parts = [w for w in WHO_SPLIT_RE.split(who) if w]
+    if not any(w.lower() in SELF_WORDS for w in parts):
+        return who
+    names = []
+    for w in parts:
+        name = author if w.lower() in SELF_WORDS else w
+        if name not in names:
+            names.append(name)
+    return ", ".join(names)
 
 
 def clean_plan(args: dict, today: date):
@@ -572,6 +590,7 @@ async def save_requested_plan(message, db: Database, args: dict, today: date) ->
     if not plan:
         await message.reply_text(error)
         return
+    plan["who"] = name_people(plan["who"], display_name(message.from_user))
     found = clashes(db, message.chat_id, plan)
     db.add_plan(message.chat_id, plan["date"], plan["what"], time=plan["time"], place=plan["place"],
                 who=plan["who"], added_by=display_name(message.from_user))
@@ -589,6 +608,7 @@ async def update_requested_plan(message, db: Database, args: dict, today: date) 
     if not plan:
         await message.reply_text(error)
         return
+    plan["who"] = name_people(plan["who"], display_name(message.from_user))
     db.update_plan(message.chat_id, old["id"], plan["date"], plan["what"], time=plan["time"],
                    place=plan["place"], who=plan["who"])
     found = clashes(db, message.chat_id, plan, skip_id=old["id"])

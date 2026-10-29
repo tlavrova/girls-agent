@@ -165,7 +165,7 @@ TOOLS = [
             "time": {"type": "string", "description": "Время HH:MM, если названо"},
             "what": {"type": "string", "description": "Что за план, коротко: «ужин», «кино», «йога»"},
             "place": {"type": "string", "description": "Где, если названо"},
-            "who": {"type": "string", "description": "Кто идёт, имена; «я» — это автор сообщения"},
+            "who": {"type": "string", "description": "Кто идёт, имена; вместо «я» пиши имя автора сообщения"},
         }, "required": ["date", "what"]},
     }},
     {"type": "function", "function": {

@@ -155,7 +155,7 @@ Findings (2026-10-28):
 
 Rule for everything below: Gigi only sees messages that mention her or reply to her. She never reads the whole chat, for privacy and to keep token use low.
 
-1. **Names, not "я", in plans**: "запомни, в субботу ужин в Moeders, я иду" is saved as "Moeders (я)", which nobody in the group can read. Replace "я" with the author's name (from `group.txt` or Telegram), and "мы" with the author plus the people named, before saving `who`.
+1. ~~**Names, not "я", in plans**~~ (done): "запомни, в субботу ужин в Moeders, я иду" is saved as "Moeders (я)", which nobody in the group can read. Replace "я" with the author's name (from `group.txt` or Telegram), and "мы" with the author plus the people named, before saving `who`.
 2. ~~**Less joking, more work**~~ (done): the group prefers a useful assistant over a funny one. Make the default tone short and to the point, with a joke only when it fits; the item below is about quality, not quantity.
 3. **Wittier humor**: today's jokes feel flat. Rework the persona prompt with examples of the wanted tone (sharp, ironic, situational, never cringe or generic), forbid stock jokes (Mondays, coffee), and try a stronger model first in `LLM_MODELS`. Collect a few real answers from the chat and compare before and after.
 4. **Reply threads**: follow a reply chain 3-5 messages back instead of one, so a conversation with Gigi feels natural while still never reading the rest of the chat.

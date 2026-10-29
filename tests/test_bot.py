@@ -97,6 +97,14 @@ class PlansTest(unittest.TestCase):
         plan = self.db.upcoming_plans(-100, "2026-10-28")[0]
         self.assertEqual((plan["what"], plan["added_by"]), ("ужин", "Таня"))
 
+    def test_self_becomes_author_name(self):
+        self.assertIn("ужин, Moeders (Таня)", self.save({"date": "2026-10-31", "what": "ужин", "place": "Moeders", "who": "я"}))
+        self.assertEqual(bot.name_people("я, Аня", "Таня"), "Таня, Аня")
+        self.assertEqual(bot.name_people("мы с Аней", "Таня"), "Таня, Аней")
+        self.assertEqual(bot.name_people("Я и Таня", "Таня"), "Таня")
+        self.assertEqual(bot.name_people("Аня и её муж", "Таня"), "Аня и её муж")
+        self.assertEqual(bot.name_people("", "Таня"), "")
+
     def test_bad_time_is_dropped(self):
         self.save({"date": "2026-10-31", "time": "вечером", "what": "кино"})
         self.assertIsNone(self.db.upcoming_plans(-100, "2026-10-28")[0]["time"])
