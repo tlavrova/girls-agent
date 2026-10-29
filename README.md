@@ -125,13 +125,11 @@ Group feedback (2026-10-29): several members find the scheduled posts clutter th
 
 All times are in the configured time zone (Europe/Amsterdam by default), each message can be switched off in `.env`, and the city is configurable.
 
-1. **Weekend picks, Fridays**: every Friday around lunch (~12:30) a short message with plans for the coming weekend, in two blocks:
-   - **For us**: 3 picks: parties, clubs, concerts, stand-up, bars.
-   - **With kids**: 2 family picks that work for children: shows, museums with kids' programs, workshops, festivals, petting farms.
+1. **Kids' weekend picks, Fridays**: every Friday around lunch (~12:30) a short message with 3 family picks for the coming weekend that work for children: shows, museums with kids' programs, workshops, festivals, petting farms.
 
    Each pick has a one-line description, date and time, location and a link. The events come from real web search (see "Real places" below) and are checked to fall on that weekend, so nothing is made up.
 
-   On hold until the group says it wants a scheduled message at all (see the feedback above). Feedback (2026-10-29): at least one member with kids would like the kids' picks, so the likely first version is kids only: the "With kids" block, maybe 3 picks instead of 2, and no adult block. Ask the group in the poll whether the adult block is wanted too. Until then the same picks work on request through search ("@Gigi куда сходить с детьми на выходных?").
+   On hold until the group says it wants a scheduled message at all (see the feedback above). Feedback (2026-10-29): at least one member with kids would like the kids' picks; adult picks (parties, bars, concerts) are dropped for now. Until then the same picks work on request through search ("@Gigi куда сходить с детьми на выходных?").
 
 ## Roadmap: real places
 
@@ -144,7 +142,7 @@ Findings (2026-10-28):
 - **Option B, a separate search API** called as a function tool, keeping the free Gemini tier: Tavily (1,000 searches a month free, no card) or Brave ($5 of credit a month, about 1,000 searches, card required). Gemini then writes the answer from the results. More code, and it's one more key and service.
 - **Chosen for now: option B with Tavily**, to stay free. It needs no card, and it returns cleaned page text with URLs, made for LLMs. About 30 searches a day is plenty for one group, weekend picks included. Its key goes into the sealed secret like the others.
 
-1. **Weekend picks**: the Friday message above, kids' picks first (see the feedback there).
+1. **Kids' weekend picks**: the Friday message above.
 2. **Real meetup suggestions**: after the date poll, offer 3 real places (restaurant, bar, party or event) for that exact date and city, instead of the generic starter ideas. It factors in the weather, budget, what people dislike (from the facts they told Gigi) and past meetups, and still prefers ideas the group saved itself. Replaces `planner.pick_ideas` for this step.
 3. ~~**Search in chat**~~ (done; saving a found place as an idea right away is still to do): "@Gigi найди итальянский ресторан в Утрехте на субботу", "что интересного в эти выходные?", "дай ссылку на сайт ресторана X", "Moeders ещё работает?". She searches the web and answers with 2-3 real options, each with an address, a link and, for events, the date. Today she answers these from the model's memory, which can be outdated or made up, and can't give links at all. A found place can be saved as an idea right away ("сохрани второй"). Searches go through the same daily limit as other answers, and the free tier's search quota needs checking.
 4. ~~**Addresses with a map link**~~ (done; real addresses need search): "какой адрес у Moeders?" today gets no answer. Answer with the address and a Google Maps link (`https://www.google.com/maps/search/?api=1&query=<name>+<city>`), and add the same link to plans with a place in `/agenda` and in "Записала 📌". The link alone works even before search, since Maps finds the place by name.
