@@ -69,6 +69,13 @@ CREATE TABLE IF NOT EXISTS facts (           -- "запомни, я не люб�
     fact       TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS exclusions (      -- "не предлагай нам караоке": the group's rule for suggestions
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id    INTEGER NOT NULL,
+    what       TEXT NOT NULL,
+    added_by   TEXT,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS plans (           -- "запомни, в субботу в 19:00 идём в кафе X"
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     chat_id    INTEGER NOT NULL,
@@ -266,6 +273,22 @@ class Database:
             (chat_id, from_date),
         ))
 
+    def add_exclusion(self, chat_id: int, what: str, added_by: str = "") -> int:
+        cur = self._exec("INSERT INTO exclusions (chat_id, what, added_by, created_at) VALUES (?, ?, ?, ?)",
+                         (chat_id, what, added_by, _now()))
+        return cur.lastrowid
+
+    def exclusions(self, chat_id: int) -> List[sqlite3.Row]:
+        return list(self.conn.execute("SELECT id, what, added_by FROM exclusions WHERE chat_id = ? ORDER BY id",
+                                      (chat_id,)))
+
+    def delete_exclusion(self, chat_id: int, exclusion_id: int) -> Optional[sqlite3.Row]:
+        row = self.conn.execute("SELECT * FROM exclusions WHERE id = ? AND chat_id = ?",
+                                (exclusion_id, chat_id)).fetchone()
+        if row:
+            self._exec("DELETE FROM exclusions WHERE id = ?", (exclusion_id,))
+        return row
+
     def past_activities(self, chat_id: int, before: str, limit: int = 5) -> List[str]:
         """What the group did at its last meetups, newest first."""
         return [r["activity"] for r in self.conn.execute(
@@ -317,10 +340,6 @@ class Database:
     def facts(self, chat_id: int, user_id: int) -> List[sqlite3.Row]:
         return list(self.conn.execute(
             "SELECT id, fact FROM facts WHERE chat_id = ? AND user_id = ? ORDER BY id", (chat_id, user_id)))
-
-    def chat_facts(self, chat_id: int) -> List[str]:
-        """Everyone's facts in the chat, without names: only for picking group meetup places."""
-        return [r["fact"] for r in self.conn.execute("SELECT fact FROM facts WHERE chat_id = ? ORDER BY id", (chat_id,))]
 
     def delete_fact(self, chat_id: int, user_id: int, fact_id: int) -> Optional[sqlite3.Row]:
         """The deleted fact, or None: people can only delete their own facts."""

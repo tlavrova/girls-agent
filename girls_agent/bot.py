@@ -71,6 +71,8 @@ COMMANDS = [
     ("ideas", "банк идей"),
     ("unidea", "удалить идею: /unidea 12 (номер из /ideas)"),
     ("recs", "что советовали: косметика, одежда, еда…"),
+    ("stoplist", "что группе не предлагать"),
+    ("unstop", "снова можно предлагать: /unstop 2 (номер из /stoplist)"),
     ("memory", "что я о тебе помню"),
     ("forget", "забыть факт о тебе: /forget 3 (номер из /memory)"),
     ("unrec", "удалить совет: /unrec 5 (номер из /recs)"),
@@ -186,13 +188,17 @@ def idea_details(idea: dict) -> str:
 
 
 async def meetup_ideas(db: Database, cfg: Config, chat_id: int, meeting_date: str, n: int = 3) -> list:
-    """The group's own ideas first, then real places found for that date, then starter ideas."""
-    ideas = planner.pick_ideas(db.unused_ideas(chat_id), [], n=n)
-    now = datetime.now(cfg.tz)
-    ideas += await suggest.real_places(cfg, now, date.fromisoformat(meeting_date), n - len(ideas),
-                                       facts=db.chat_facts(chat_id), past=db.past_activities(chat_id, meeting_date))
+    """Real places found for that date; the group's saved ideas and the starter set only when search finds too few.
+
+    Saved ideas don't come first: the group can look at /ideas itself, and new places would stop
+    showing up once enough ideas pile up.
+    """
+    ideas = await suggest.real_places(cfg, datetime.now(cfg.tz), date.fromisoformat(meeting_date), n,
+                                      exclusions=[e["what"] for e in db.exclusions(chat_id)],
+                                      past=db.past_activities(chat_id, meeting_date))
     titles = {i["title"] for i in ideas}
-    ideas += [s for s in planner.pick_ideas([], SEED_IDEAS, n=n) if s["title"] not in titles][:n - len(ideas)]
+    ideas += [s for s in planner.pick_ideas(db.unused_ideas(chat_id), SEED_IDEAS, n=n)
+              if s["title"] not in titles][:n - len(ideas)]
     return ideas
 
 
@@ -466,6 +472,7 @@ async def assistant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         replied_text=replied_text,
         replied_is_gigi=bool(reply and reply.from_user and reply.from_user.id == bot.id),
         search=bool(cfg.search_api_key),
+        exclusions=[f"[#{e['id']}] {e['what']}" for e in _db(context).exclusions(message.chat_id)],
     )
     typing = asyncio.create_task(keep_typing(bot, message.chat_id))
     try:
@@ -532,6 +539,12 @@ async def answer_with_llm(message, db: Database, cfg: Config, messages: list, no
     if call and call[0] == "list_recommendations":
         await message.reply_text(recommendations_text(db, message.chat_id, call[1].get("category")),
                                  parse_mode=ParseMode.HTML)
+        return
+    if call and call[0] == "exclude":
+        await exclude_requested(message, db, call[1].get("what"))
+        return
+    if call and call[0] == "allow_again":
+        await message.reply_text(allow_again_text(db, message.chat_id, call[1].get("id")))
         return
     if call and call[0] == "remember_fact":
         await remember_requested(message, db, call[1].get("fact"))
@@ -770,6 +783,42 @@ async def forget_requested(message, db: Database, args: dict) -> None:
         await message.reply_text(f"Удалила {'идею' if is_idea else 'совет'} 🗑 {found[0]['title']}")
 
 
+MAX_EXCLUSIONS = 30  # per chat: keeps the prompt short
+
+
+async def exclude_requested(message, db: Database, what) -> None:
+    what = planner.truncate(str(what or "").strip(), 100)
+    if not what:
+        await message.reply_text("Не поняла, что не предлагать 🤔")
+        return
+    if len(db.exclusions(message.chat_id)) >= MAX_EXCLUSIONS:
+        await message.reply_text("Список «не предлагать» уже длинный, пора что-то вычеркнуть 🙃 Посмотри /stoplist.")
+        return
+    exclusion_id = db.add_exclusion(message.chat_id, what, display_name(message.from_user))
+    await message.reply_text(f"Больше не предлагаю 🚫 {what}\nСписок — /stoplist, вернуть — /unstop {exclusion_id}")
+
+
+def allow_again_text(db: Database, chat_id: int, exclusion_id) -> str:
+    row = db.delete_exclusion(chat_id, _plan_id(exclusion_id))
+    return f"Снова можно предлагать ✅ {row['what']}" if row else "Не нашла такого правила 🤔 Номера — в /stoplist."
+
+
+async def stoplist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    rows = _db(context).exclusions(update.effective_chat.id)
+    if not rows:
+        await update.effective_message.reply_text(
+            "Список пуст: предлагаю всё. Если что-то не нравится: «@Gigi не предлагай нам караоке» 🚫")
+        return
+    lines = ["🚫 Не предлагаю:"] + [f"#{r['id']} {r['what']}" + (f" ({r['added_by']})" if r["added_by"] else "")
+                                  for r in rows] + ["Снова можно: /unstop номер"]
+    await update.effective_message.reply_text("\n".join(lines))
+
+
+async def unstop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text(
+        allow_again_text(_db(context), update.effective_chat.id, context.args[0] if context.args else ""))
+
+
 MAX_FACTS = 30  # per person: keeps the prompt short
 
 
@@ -1005,6 +1054,8 @@ def build_app(cfg: Config) -> Application:
     app.add_handler(CommandHandler("unidea", unidea_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("recs", recs_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("memory", memory_cmd, filters.ChatType.GROUPS))
+    app.add_handler(CommandHandler("stoplist", stoplist_cmd, filters.ChatType.GROUPS))
+    app.add_handler(CommandHandler("unstop", unstop_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("forget", forget_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("unrec", unrec_cmd, filters.ChatType.GROUPS))
     app.add_handler(PollAnswerHandler(poll_answer))
