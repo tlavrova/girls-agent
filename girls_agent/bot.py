@@ -37,7 +37,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import llm, morning, planner, search, weather
+from . import llm, morning, planner, search, suggest, weather
 from .config import Config, load_config
 from .db import Database
 from .goodnight import GOODNIGHT
@@ -175,9 +175,30 @@ async def start_date_poll(bot: Bot, db: Database, cfg: Config, chat_id: int) -> 
     )
 
 
+def idea_details(idea: dict) -> str:
+    """An idea's details with the address and link of a real place, as plain text for the agenda."""
+    text = idea.get("details") or ""
+    if idea.get("address"):
+        text += f"{' · ' if text else ''}📍 {idea['address']}"
+    if idea.get("url"):
+        text += f"{chr(10) if text else ''}🔗 {idea['url']}"
+    return text
+
+
+async def meetup_ideas(db: Database, cfg: Config, chat_id: int, meeting_date: str, n: int = 3) -> list:
+    """The group's own ideas first, then real places found for that date, then starter ideas."""
+    ideas = planner.pick_ideas(db.unused_ideas(chat_id), [], n=n)
+    now = datetime.now(cfg.tz)
+    ideas += await suggest.real_places(cfg, now, date.fromisoformat(meeting_date), n - len(ideas),
+                                       facts=db.chat_facts(chat_id), past=db.past_activities(chat_id, meeting_date))
+    titles = {i["title"] for i in ideas}
+    ideas += [s for s in planner.pick_ideas([], SEED_IDEAS, n=n) if s["title"] not in titles][:n - len(ideas)]
+    return ideas
+
+
 async def propose_activities(bot: Bot, db: Database, cfg: Config, chat_id: int,
                              meeting_id: int, meeting_date: str) -> None:
-    ideas = planner.pick_ideas(db.unused_ideas(chat_id), SEED_IDEAS, n=3)
+    ideas = await meetup_ideas(db, cfg, chat_id, meeting_date)
     options = [planner.idea_option(i) for i in ideas]
     lines = [f"Что делаем {html.escape(human_date(meeting_date))}? Варианты:"]
     for idea in ideas:
@@ -186,8 +207,15 @@ async def propose_activities(bot: Bot, db: Database, cfg: Config, chat_id: int,
             line += f" — {html.escape(idea['details'])}"
         if idea.get("added_by"):
             line += f" <i>(идея от {html.escape(idea['added_by'])})</i>"
+        links = []
+        if idea.get("address"):
+            links.append(f'📍 <a href="{html.escape(maps_url(idea["address"]))}">{html.escape(idea["address"])}</a>')
+        if idea.get("url"):
+            links.append(f'<a href="{html.escape(idea["url"])}">источник</a>')
+        if links:
+            line += "\n    " + " · ".join(links)
         lines.append(line)
-    await bot.send_message(chat_id, "\n".join(lines), parse_mode=ParseMode.HTML)
+    await bot.send_message(chat_id, "\n".join(lines), parse_mode=ParseMode.HTML, link_preview_options=NO_PREVIEW)
 
     msg = await bot.send_poll(
         chat_id,
@@ -242,7 +270,7 @@ async def finish_poll(bot: Bot, db: Database, cfg: Config, poll) -> None:
             note = "Голосов не было — доверилась судьбе 🎲\n"
         idea = ideas[winner]
         meeting = db.get_meeting(payload["meeting_id"])
-        db.set_meeting_plan(meeting["id"], idea["title"], idea.get("details", ""))
+        db.set_meeting_plan(meeting["id"], idea["title"], idea_details(idea))
         if idea.get("id"):
             db.mark_idea_used(idea["id"])
         msg = await bot.send_message(
@@ -250,7 +278,7 @@ async def finish_poll(bot: Bot, db: Database, cfg: Config, poll) -> None:
             f"{note}✅ <b>План готов!</b>\n"
             f"🗓 {html.escape(human_date(meeting['date']))}\n"
             f"{planner.KIND_EMOJI.get(idea['kind'], '✨')} {html.escape(idea['title'])}"
-            + (f"\n📝 {html.escape(idea['details'])}" if idea.get("details") else "")
+            + (f"\n📝 {html.escape(idea_details(idea))}" if idea_details(idea) else "")
             + "\n\nВсё сохранено в /agenda",
             parse_mode=ParseMode.HTML,
         )

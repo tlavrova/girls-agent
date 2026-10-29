@@ -266,6 +266,12 @@ class Database:
             (chat_id, from_date),
         ))
 
+    def past_activities(self, chat_id: int, before: str, limit: int = 5) -> List[str]:
+        """What the group did at its last meetups, newest first."""
+        return [r["activity"] for r in self.conn.execute(
+            "SELECT activity FROM meetings WHERE chat_id = ? AND status = 'planned' AND date < ? "
+            "AND activity IS NOT NULL ORDER BY date DESC LIMIT ?", (chat_id, before, limit))]
+
     # --- plans (saved from chat) ---
 
     def add_plan(self, chat_id: int, plan_date: str, what: str, *, time: Optional[str] = None,
@@ -311,6 +317,10 @@ class Database:
     def facts(self, chat_id: int, user_id: int) -> List[sqlite3.Row]:
         return list(self.conn.execute(
             "SELECT id, fact FROM facts WHERE chat_id = ? AND user_id = ? ORDER BY id", (chat_id, user_id)))
+
+    def chat_facts(self, chat_id: int) -> List[str]:
+        """Everyone's facts in the chat, without names: only for picking group meetup places."""
+        return [r["fact"] for r in self.conn.execute("SELECT fact FROM facts WHERE chat_id = ? ORDER BY id", (chat_id,))]
 
     def delete_fact(self, chat_id: int, user_id: int, fact_id: int) -> Optional[sqlite3.Row]:
         """The deleted fact, or None: people can only delete their own facts."""
