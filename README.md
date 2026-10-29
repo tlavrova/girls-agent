@@ -118,6 +118,11 @@ To update a running server, run `deploy/setup.sh` again: it pulls the latest ima
 
 ## Roadmap: daily and weekly messages
 
+Group feedback (2026-10-29): several members find the scheduled posts clutter the chat and want Gigi to "just do the job". They don't like the good-night jokes ("like forwarded memes from a relative") or the bad news in the morning message, and they read news themselves. So:
+
+1. **Scheduled posts off by default**: `GOODNIGHT_TIME` and `MORNING_TIME` empty unless the group asks for them; switch them off in our deployment now. Gigi speaks only when asked, plus the meetup flow.
+2. **Ask before adding new ones**: the Friday picks below go out only if the group wants them (a quick poll first).
+
 All times are in the configured time zone (Europe/Amsterdam by default), each message can be switched off in `.env`, and the city is configurable.
 
 1. **Weekend picks, Fridays**: every Friday around lunch (~12:30) a short message with plans for the coming weekend, in two blocks:
@@ -125,6 +130,8 @@ All times are in the configured time zone (Europe/Amsterdam by default), each me
    - **With kids**: 2 family picks that work for children: shows, museums with kids' programs, workshops, festivals, petting farms.
 
    Each pick has a one-line description, date and time, location and a link. The events come from real web search (see "Real places" below) and are checked to fall on that weekend, so nothing is made up.
+
+   On hold until the group says it wants a scheduled message at all (see the feedback above).
 
 ## Roadmap: real places
 
@@ -140,14 +147,18 @@ Findings (2026-10-28):
 1. **Weekend picks**: the Friday message above, for adults and for families with kids.
 2. **Real meetup suggestions**: after the date poll, offer 3 real places (restaurant, bar, party or event) for that exact date and city, instead of the generic starter ideas. It factors in the weather, budget, what people dislike (from the facts they told Gigi) and past meetups, and still prefers ideas the group saved itself. Replaces `planner.pick_ideas` for this step.
 3. **Search in chat**: "@Gigi найди итальянский ресторан в Утрехте на субботу", "что интересного в эти выходные?", "дай ссылку на сайт ресторана X", "Moeders ещё работает?". She searches the web and answers with 2-3 real options, each with an address, a link and, for events, the date. Today she answers these from the model's memory, which can be outdated or made up, and can't give links at all. A found place can be saved as an idea right away ("сохрани второй"). Searches go through the same daily limit as other answers, and the free tier's search quota needs checking.
-4. **Facts only from sources**: once search works, questions about specific places, products and opening hours ("как тебе Moeders?", "какой крем от сухости?") go through search too, so the answer rests on real reviews and current info and carries a link, instead of a confident answer from memory.
+4. **Addresses with a map link**: "какой адрес у Moeders?" today gets no answer. Answer with the address and a Google Maps link (`https://www.google.com/maps/search/?api=1&query=<name>+<city>`), and add the same link to plans with a place in `/agenda` and in "Записала 📌". The link alone works even before search, since Maps finds the place by name.
+5. **No made-up places**: asked to recommend a restaurant, she suggested "Herenzicht", which couldn't be found and probably doesn't exist. Until search works, she must not name specific places from memory: offer the group's saved ideas or say she can't check yet.
+6. **Facts only from sources**: once search works, questions about specific places, products and opening hours ("как тебе Moeders?", "какой крем от сухости?") go through search too, so the answer rests on real reviews and current info and carries a link, instead of a confident answer from memory.
 
 ## Roadmap: AI assistant
 
 Rule for everything below: Gigi only sees messages that mention her or reply to her. She never reads the whole chat, for privacy and to keep token use low.
 
-1. **Wittier humor**: today's jokes feel flat. Rework the persona prompt with examples of the wanted tone (sharp, ironic, situational, never cringe or generic), forbid stock jokes (Mondays, coffee), and try a stronger model first in `LLM_MODELS`. Collect a few real answers from the chat and compare before and after.
-2. **Reply threads**: follow a reply chain 3-5 messages back instead of one, so a conversation with Gigi feels natural while still never reading the rest of the chat.
-3. **Fresh good-night wishes**: once the LLM is connected, let it write each day's good-night message, keeping the list in `goodnight.py` as a fallback.
-4. **Links and screenshots**: extract name, address, date and price from a restaurant link, event page or screenshot.
-5. **Delegation**: "book a table for 6", "remind everyone the day before".
+1. **Names, not "я", in plans**: "запомни, в субботу ужин в Moeders, я иду" is saved as "Moeders (я)", which nobody in the group can read. Replace "я" with the author's name (from `group.txt` or Telegram), and "мы" with the author plus the people named, before saving `who`.
+2. **Less joking, more work**: the group prefers a useful assistant over a funny one. Make the default tone short and to the point, with a joke only when it fits; the item below is about quality, not quantity.
+3. **Wittier humor**: today's jokes feel flat. Rework the persona prompt with examples of the wanted tone (sharp, ironic, situational, never cringe or generic), forbid stock jokes (Mondays, coffee), and try a stronger model first in `LLM_MODELS`. Collect a few real answers from the chat and compare before and after.
+4. **Reply threads**: follow a reply chain 3-5 messages back instead of one, so a conversation with Gigi feels natural while still never reading the rest of the chat.
+5. **Fresh good-night wishes**: dropped for now, the group doesn't want the good-night message (see "Daily and weekly messages").
+6. **Links and screenshots**: extract name, address, date and price from a restaurant link, event page or screenshot.
+7. **Delegation**: "book a table for 6", "remind everyone the day before".
