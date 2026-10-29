@@ -20,8 +20,9 @@ import random
 import re
 from datetime import date, datetime, time as dtime, timedelta, timezone
 from typing import Optional
+from urllib.parse import quote_plus
 
-from telegram import Bot, Update
+from telegram import Bot, LinkPreviewOptions, Update
 from telegram.constants import ChatAction, MessageEntityType, ParseMode
 from telegram.error import TelegramError
 from telegram.ext import (
@@ -117,11 +118,23 @@ def human_date(iso: str) -> str:
     return planner.format_date(date.fromisoformat(iso))
 
 
-def plan_line(p) -> str:
-    """One saved plan in plain text: "сб, 31 октября, 19:00 — ужин, кафе X (Таня, Аня)"."""
+def maps_url(place: str) -> str:
+    """A Google Maps search for the place: finds it by name, so it works without knowing the address."""
+    return "https://www.google.com/maps/search/?api=1&query=" + quote_plus(place)
+
+
+def plan_line(p, links: bool = False) -> str:
+    """One saved plan: "сб, 31 октября, 19:00 — ужин, кафе X (Таня, Аня)".
+
+    links=True gives HTML with the place linked to Google Maps; otherwise plain text.
+    """
+    esc = html.escape if links else str
     when = human_date(p["date"]) + (f", {p['time']}" if p["time"] else "")
-    line = f"{when} — {p['what']}" + (f", {p['place']}" if p["place"] else "")
-    return line + (f" ({p['who']})" if p["who"] else "")
+    line = esc(f"{when} — {p['what']}")
+    if p["place"]:
+        place = f'<a href="{html.escape(maps_url(p["place"]))}">{html.escape(p["place"])}</a>' if links else p["place"]
+        line += f", {place}"
+    return line + (esc(f" ({p['who']})") if p["who"] else "")
 
 
 def plans_for_llm(db: Database, chat_id: int, today: date) -> str:
@@ -520,6 +533,7 @@ async def create_requested_poll(message, args: dict) -> None:
 
 TIME_RE = re.compile(r"([01]?\d|2[0-3]):[0-5]\d")
 OVERLAP = timedelta(hours=2)  # plans this close on the same day probably clash
+NO_PREVIEW = LinkPreviewOptions(is_disabled=True)  # a map card under every plan is noise
 WHO_SPLIT_RE = re.compile(r"\s*(?:,|\bи\b|\bсо?\b)\s*", re.IGNORECASE)
 SELF_WORDS = {"я", "меня", "мне", "мной", "мы", "нас"}  # the LLM sometimes keeps these instead of the author's name
 
@@ -576,7 +590,7 @@ def clashes(db: Database, chat_id: int, plan: dict, skip_id: Optional[int] = Non
 def clash_note(found: list) -> str:
     if not found:
         return ""
-    names = "; ".join(plan_line(p) for p in found)
+    names = "; ".join(plan_line(p, links=True) for p in found)
     return f"\n⚠️ На это время уже записано: {names}. Оставить оба или заменить? Скажи «@Gigi удали …», если старое не нужно."
 
 
@@ -594,7 +608,8 @@ async def save_requested_plan(message, db: Database, args: dict, today: date) ->
     found = clashes(db, message.chat_id, plan)
     db.add_plan(message.chat_id, plan["date"], plan["what"], time=plan["time"], place=plan["place"],
                 who=plan["who"], added_by=display_name(message.from_user))
-    await message.reply_text(f"Записала 📌 {plan_line(plan)}{clash_note(found)}\nВсе планы — /agenda")
+    await message.reply_text(f"Записала 📌 {plan_line(plan, links=True)}{clash_note(found)}\nВсе планы — /agenda",
+                             parse_mode=ParseMode.HTML, link_preview_options=NO_PREVIEW)
 
 
 async def update_requested_plan(message, db: Database, args: dict, today: date) -> None:
@@ -612,7 +627,8 @@ async def update_requested_plan(message, db: Database, args: dict, today: date) 
     db.update_plan(message.chat_id, old["id"], plan["date"], plan["what"], time=plan["time"],
                    place=plan["place"], who=plan["who"])
     found = clashes(db, message.chat_id, plan, skip_id=old["id"])
-    await message.reply_text(f"Поправила ✏️ {plan_line(plan)}{clash_note(found)}")
+    await message.reply_text(f"Поправила ✏️ {plan_line(plan, links=True)}{clash_note(found)}",
+                             parse_mode=ParseMode.HTML, link_preview_options=NO_PREVIEW)
 
 
 async def delete_requested_plan(message, db: Database, plan_id) -> None:
@@ -859,9 +875,10 @@ async def agenda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         lines.append(line)
     if plans:
         lines.append("\n📌 <b>Планы</b>")
-        lines.extend(f"#{p['id']} {html.escape(plan_line(p))}" for p in plans)
+        lines.extend(f"#{p['id']} {plan_line(p, links=True)}" for p in plans)
         lines.append("<i>Удалить: /unplan номер</i>")
-    await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+    await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML,
+                                              link_preview_options=NO_PREVIEW)
 
 
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

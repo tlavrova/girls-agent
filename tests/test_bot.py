@@ -1,4 +1,6 @@
 import asyncio
+import html
+import re
 import unittest
 from datetime import date
 from types import SimpleNamespace
@@ -6,6 +8,11 @@ from unittest.mock import AsyncMock
 
 from girls_agent import bot, weather
 from girls_agent.db import Database
+
+
+def plain(text: str) -> str:
+    """An HTML reply as the user reads it: tags gone, entities decoded."""
+    return html.unescape(re.sub(r"<[^>]+>", "", text))
 
 
 class RequestedPollTest(unittest.TestCase):
@@ -86,16 +93,24 @@ class PlansTest(unittest.TestCase):
         return SimpleNamespace(chat_id=-100, from_user=SimpleNamespace(full_name="Таня", username=None, id=1),
                                reply_text=AsyncMock())
 
-    def save(self, args):
+    def save(self, args, raw=False):
         message = self.fake_message()
         asyncio.run(bot.save_requested_plan(message, self.db, args, self.today))
-        return message.reply_text.call_args.args[0]
+        reply = message.reply_text.call_args.args[0]
+        return reply if raw else plain(reply)
 
     def test_saves_and_confirms(self):
         reply = self.save({"date": "2026-10-31", "time": "19:00", "what": "ужин", "place": "кафе X", "who": "Таня, Аня"})
         self.assertIn("сб, 31 октября, 19:00 — ужин, кафе X (Таня, Аня)", reply)
         plan = self.db.upcoming_plans(-100, "2026-10-28")[0]
         self.assertEqual((plan["what"], plan["added_by"]), ("ужин", "Таня"))
+
+    def test_place_links_to_maps(self):
+        reply = self.save({"date": "2026-10-31", "what": "ужин", "place": "Café <De Pijp>", "who": "Таня"}, raw=True)
+        self.assertIn('ужин, <a href="https://www.google.com/maps/search/?api=1&amp;query=Caf%C3%A9+%3CDe+Pijp%3E">'
+                      'Café &lt;De Pijp&gt;</a> (Таня)', reply)
+        plan = self.db.upcoming_plans(-100, "2026-10-28")[0]
+        self.assertEqual(bot.plan_line(plan), "сб, 31 октября — ужин, Café <De Pijp> (Таня)")
 
     def test_self_becomes_author_name(self):
         self.assertIn("ужин, Moeders (Таня)", self.save({"date": "2026-10-31", "what": "ужин", "place": "Moeders", "who": "я"}))
@@ -133,7 +148,7 @@ class PlanEditsTest(unittest.TestCase):
         message = SimpleNamespace(chat_id=chat_id, from_user=SimpleNamespace(full_name="Таня", username=None, id=1),
                                   reply_text=AsyncMock())
         asyncio.run(coro_fn(message, self.db, *args))
-        return message.reply_text.call_args.args[0]
+        return plain(message.reply_text.call_args.args[0])
 
     def test_clash_is_reported_but_saved(self):
         reply = self.run_reply(bot.save_requested_plan, {"date": "2026-10-31", "time": "20:00", "what": "бар"}, self.today)
