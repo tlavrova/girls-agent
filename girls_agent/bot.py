@@ -37,7 +37,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import kids, llm, morning, planner, search, weather
+from . import llm, morning, planner, search, weather
 from .config import Config, load_config
 from .db import Database
 from .goodnight import GOODNIGHT
@@ -334,23 +334,6 @@ async def morning_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_message(chat_id, text)
         except TelegramError as e:
             log.warning("morning message failed for %s: %s", chat_id, e)
-
-
-async def kids_picks_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    db, cfg = _db(context), _cfg(context)
-    chat_ids = group_chats(db, cfg)
-    if not chat_ids:
-        return
-    # composed once for all chats: two searches and one LLM request a week
-    text = await kids.compose(cfg, datetime.now(cfg.tz))
-    if not text:
-        log.info("kids' picks skipped: nothing suitable found or search / LLM unavailable")
-        return
-    for chat_id in chat_ids:
-        try:
-            await context.bot.send_message(chat_id, text, link_preview_options=NO_PREVIEW)
-        except TelegramError as e:
-            log.warning("kids' picks failed for %s: %s", chat_id, e)
 
 
 async def forget_old_plans_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1007,9 +990,6 @@ def build_app(cfg: Config) -> Application:
     jq.run_daily(reminder_job, dtime(*cfg.reminder_time, tzinfo=cfg.tz), name="reminders")
     if cfg.morning_time:
         jq.run_daily(morning_job, dtime(*cfg.morning_time, tzinfo=cfg.tz), name="morning")
-    if cfg.kids_picks_time:
-        # python-telegram-bot counts days from Sunday = 0, so Friday is 5
-        jq.run_daily(kids_picks_job, dtime(*cfg.kids_picks_time, tzinfo=cfg.tz), days=(5,), name="kids_picks")
     if cfg.goodnight_time:
         jq.run_daily(goodnight_job, dtime(*cfg.goodnight_time, tzinfo=cfg.tz), name="goodnight")
     jq.run_repeating(close_due_job, interval=600, first=10, name="close_due")

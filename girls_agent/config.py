@@ -41,8 +41,6 @@ class Config:
     reminder_time: tuple
     goodnight_time: Optional[tuple]  # None = no good-night message
     morning_time: Optional[tuple]    # None = no morning message
-    kids_picks_time: Optional[tuple]  # Fridays; None = no kids' weekend picks
-    kids_picks_city: str              # searched for events, in Latin letters
     weather_city: str                # shown in messages
     weather_lat: float
     weather_lon: float
@@ -77,8 +75,6 @@ def load_config() -> Config:
         reminder_time=_hhmm(os.environ.get("REMINDER_TIME", "18:00")),
         goodnight_time=_optional_hhmm(os.environ.get("GOODNIGHT_TIME", "off")),
         morning_time=_optional_hhmm(os.environ.get("MORNING_TIME", "off")),
-        kids_picks_time=_optional_hhmm(os.environ.get("KIDS_PICKS_TIME", "off")),
-        kids_picks_city=os.environ.get("KIDS_PICKS_CITY", "Amsterdam"),
         weather_city=os.environ.get("WEATHER_CITY", "Амстердам"),
         weather_lat=float(os.environ.get("WEATHER_LAT", "52.37")),
         weather_lon=float(os.environ.get("WEATHER_LON", "4.90")),
