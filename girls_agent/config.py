@@ -49,6 +49,8 @@ class Config:
     llm_base_url: str                # any OpenAI-compatible API
     llm_models: tuple                # tried in order until one answers
     llm_daily_limit: int             # answers per chat per day
+    search_api_key: Optional[str]    # Tavily; None = no web search, Gigi doesn't name places
+    search_daily_limit: int          # searches per day for the whole bot
     allowed_chats: tuple             # group chat ids the bot works in; empty = any chat
     group_file: str                  # text file describing the group and its members, for the LLM
     date_poll_days: int
@@ -82,6 +84,8 @@ def load_config() -> Config:
         llm_models=tuple(m.strip() for m in os.environ.get(
             "LLM_MODELS", DEFAULT_LLM_MODELS).split(",") if m.strip()),
         llm_daily_limit=int(os.environ.get("LLM_DAILY_LIMIT", "50")),
+        search_api_key=os.environ.get("TAVILY_API_KEY") or None,
+        search_daily_limit=int(os.environ.get("SEARCH_DAILY_LIMIT", "30")),
         allowed_chats=_int_list(os.environ.get("ALLOWED_CHATS", "")),
         group_file=os.environ.get("GROUP_FILE", "group.txt"),
         date_poll_days=int(os.environ.get("DATE_POLL_DAYS", "3")),

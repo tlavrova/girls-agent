@@ -62,6 +62,16 @@ PERSONA = (
     "Никогда не пиши «запомнила», «записала», «удалила» сама: это делают только инструменты, "
     "и подтверждение пришлёт бот. Без вызова инструмента ничего не сохраняется. "
     "То, что ты знаешь об авторе, учитывай в советах, но не пересказывай без повода. "
+    "{places}"
+    "Погоду никогда не выдумывай: если она важна для ответа, узнай через get_weather; без этого вызова "
+    "о погоде не пиши ни слова, даже мимоходом. "
+    "Даты бери из «Календаря», не высчитывай сама: «в субботу» — ближайшая суббота оттуда. "
+    "Спрашивают о планах («когда я иду в…», «какие у нас планы») — сначала факты из списка «Планы»; чего нет в списке, того ты не знаешь, так и скажи. "
+    "Если нужны другие свежие данные (новости, цены), честно скажи, что пока так не умеешь. "
+    "Сейчас {now}."
+)
+
+PLACES_NO_SEARCH = (
     "Конкретные места никогда не называй по памяти: ни рестораны, ни бары, ни магазины, ни мастеров, ни события, "
     "ни их адреса, часы работы, цены и меню — они могут не существовать или уже закрыться. Интернета у тебя пока нет. "
     "Просят посоветовать место — честно скажи, что пока не умеешь искать в интернете, "
@@ -70,12 +80,16 @@ PERSONA = (
     "без выдуманного адреса. Общее направление («итальянская кухня», "
     "«бар с живой музыкой») подсказать можно. Названия, которые прислали подруги или которые есть в «Планах», "
     "называть можно, но без выдуманных подробностей. "
-    "Погоду никогда не выдумывай: если она важна для ответа, узнай через get_weather; без этого вызова "
-    "о погоде не пиши ни слова, даже мимоходом. "
-    "Даты бери из «Календаря», не высчитывай сама: «в субботу» — ближайшая суббота оттуда. "
-    "Спрашивают о планах («когда я иду в…», «какие у нас планы») — сначала факты из списка «Планы»; чего нет в списке, того ты не знаешь, так и скажи. "
-    "Если нужны другие свежие данные (новости, цены), честно скажи, что пока так не умеешь. "
-    "Сейчас {now}."
+)
+
+PLACES_SEARCH = (
+    "Конкретные места, события, адреса, часы работы и цены никогда не называй по памяти: они могут не существовать "
+    "или уже закрыться. Просят посоветовать место или событие, узнать адрес, работает ли место, что идёт "
+    "в выходные — сначала вызови web_search с запросом на языке страны и с городом (например, "
+    "«italiaans restaurant Utrecht»). Называй только то, что есть в результатах: 2–3 варианта, у каждого "
+    "одна строка о том, что это, адрес, если он есть в результатах, и ссылка из результатов, голым URL без Markdown. "
+    "Ничего не добавляй от себя: чего нет в результатах, того ты не знаешь. Подходящего не нашлось — так и скажи. "
+    "Учитывай, что человек рассказывал о себе и что любит группа. Мнение о месте давай только по найденным отзывам. "
 )
 
 GROUP_DEFAULT = "Подруги, говорят по-русски, живут в {city}."
@@ -114,12 +128,15 @@ def load_group(path: str, city: str) -> str:
 
 def build_messages(question: str, now: datetime, *, author: str = "", group: str = "",
                    plans: Optional[str] = None, facts: Sequence[str] = (),
-                   replied_text: Optional[str] = None, replied_is_gigi: bool = False) -> List[dict]:
+                   replied_text: Optional[str] = None, replied_is_gigi: bool = False,
+                   search: bool = False) -> List[dict]:
     """System prompt plus at most two messages: what she replied to (if any) and the question.
 
     plans is the group's upcoming plans, one per line; None leaves them out (e.g. the morning message).
+    search says whether the web_search tool is offered, which changes the rules about places.
     """
-    system = PERSONA.format(now=f"{now:%Y-%m-%d %H:%M}, {WEEKDAYS[now.weekday()]}") + "\n\n" + calendar(now)
+    system = PERSONA.format(now=f"{now:%Y-%m-%d %H:%M}, {WEEKDAYS[now.weekday()]}",
+                            places=PLACES_SEARCH if search else PLACES_NO_SEARCH) + "\n\n" + calendar(now)
     if group:
         system += f"\n\nО группе:\n{group}"
     if plans is not None:
@@ -150,6 +167,14 @@ TOOLS = [
             "options": {"type": "array", "items": {"type": "string"}, "description": "Варианты ответа, от 2 до 10"},
             "multiple": {"type": "boolean", "description": "Можно выбрать несколько вариантов"},
         }, "required": ["question", "options"]},
+    }},
+    {"type": "function", "function": {
+        "name": "web_search",
+        "description": ("Найти в интернете реальные места, события, адреса, часы работы, сайты и отзывы. "
+                        "Вызывай, прежде чем называть любое конкретное место или событие."),
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Поисковый запрос с городом, лучше на языке страны"},
+        }, "required": ["query"]},
     }},
     {"type": "function", "function": {
         "name": "get_weather",
@@ -284,12 +309,24 @@ async def complete(base_url: str, api_key: str, models: Sequence[str], messages:
     return ((message or {}).get("content") or "").strip()
 
 
-def tool_call(message: dict) -> Optional[tuple]:
-    """(name, arguments, call id) of the first tool call in a reply, or None. Bad JSON arguments count as none."""
+def tools(search: bool) -> list:
+    """The tools offered to the model: web_search only when a search key is set."""
+    return TOOLS if search else [t for t in TOOLS if t["function"]["name"] != "web_search"]
+
+
+def tool_calls(message: dict) -> List[tuple]:
+    """(name, arguments, call id) of every tool call in a reply. Calls with bad JSON arguments are skipped."""
+    calls = []
     for call in message.get("tool_calls") or []:
         try:
             args = json.loads(call["function"].get("arguments") or "{}")
-            return call["function"]["name"], args if isinstance(args, dict) else {}, call.get("id") or ""
+            calls.append((call["function"]["name"], args if isinstance(args, dict) else {}, call.get("id") or ""))
         except (KeyError, TypeError, ValueError):
             continue
-    return None
+    return calls
+
+
+def tool_call(message: dict) -> Optional[tuple]:
+    """The first of tool_calls, or None."""
+    calls = tool_calls(message)
+    return calls[0] if calls else None

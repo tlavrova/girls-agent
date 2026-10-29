@@ -37,7 +37,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import llm, morning, planner, weather
+from . import llm, morning, planner, search, weather
 from .config import Config, load_config
 from .db import Database
 from .goodnight import GOODNIGHT
@@ -437,6 +437,7 @@ async def assistant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         facts=[f"[#{f['id']}] {f['fact']}" for f in _db(context).facts(message.chat_id, update.effective_user.id)],
         replied_text=replied_text,
         replied_is_gigi=bool(reply and reply.from_user and reply.from_user.id == bot.id),
+        search=bool(cfg.search_api_key),
     )
     typing = asyncio.create_task(keep_typing(bot, message.chat_id))
     try:
@@ -455,9 +456,38 @@ async def keep_typing(bot: Bot, chat_id: int) -> None:
         await asyncio.sleep(4)
 
 
+LOOKUPS = ("get_weather", "web_search")  # tools whose result goes back to the model before it answers
+MAX_LOOKUP_ROUNDS = 3
+MAX_SEARCHES = 2  # per answer: a search and one refined query are enough, and the free tier is small
+
+
+async def lookup(cfg: Config, name: str, args: dict, today: date, searches: int) -> str:
+    if name == "get_weather":
+        return await weather.lookup(cfg, args.get("city"), _parse_date(args.get("date"), today), today)
+    if searches > MAX_SEARCHES:
+        return "Хватит поисков, ответь по тому, что уже нашлось."
+    return await search.lookup(cfg.search_api_key, args.get("query"), today, cfg.search_daily_limit)
+
+
 async def answer_with_llm(message, db: Database, cfg: Config, messages: list, now: datetime) -> None:
-    ask = functools.partial(llm.chat, cfg.llm_base_url, cfg.llm_api_key, cfg.llm_models, tools=llm.TOOLS)
+    ask = functools.partial(llm.chat, cfg.llm_base_url, cfg.llm_api_key, cfg.llm_models,
+                            tools=llm.tools(bool(cfg.search_api_key)))
     reply_msg = await ask(messages)
+    # weather and search results go back to the model, which then answers or calls an action tool;
+    # every call in the reply gets a result, as the API expects
+    fallback, searches = "", 0
+    for _ in range(MAX_LOOKUP_ROUNDS):
+        calls = llm.tool_calls(reply_msg) if reply_msg else []
+        if not calls or any(name not in LOOKUPS for name, _, _ in calls):
+            break
+        results = []
+        for name, args, call_id in calls:
+            searches += name == "web_search"
+            facts = await lookup(cfg, name, args, now.date(), searches)
+            fallback = facts if name == "get_weather" else ""
+            results.append({"role": "tool", "tool_call_id": call_id, "content": facts})
+        messages = messages + [reply_msg] + results
+        reply_msg = await ask(messages)
     call = llm.tool_call(reply_msg) if reply_msg else None
     if call and call[0] == "create_poll":
         await create_requested_poll(message, call[1])
@@ -490,14 +520,10 @@ async def answer_with_llm(message, db: Database, cfg: Config, messages: list, no
     if call and call[0] == "delete_plan":
         await delete_requested_plan(message, db, call[1].get("id"))
         return
-    if call and call[0] == "get_weather":
-        facts = await weather.lookup(cfg, call[1].get("city"), _parse_date(call[1].get("date"), now.date()), now.date())
-        # second request: let Gigi phrase the forecast in her own style
-        reply_msg = await ask(messages + [reply_msg, {"role": "tool", "tool_call_id": call[2], "content": facts}])
-        answer = (reply_msg or {}).get("content") or facts
-    else:
-        answer = (reply_msg or {}).get("content") or ""
-    await message.reply_text(answer.strip() or "Что-то я зависла 😵‍💫 Спроси ещё раз чуть позже.")
+    answer = ((reply_msg or {}).get("content") or "").strip() or fallback
+    # several found places would each get a link preview: none is cleaner
+    await message.reply_text(answer or "Что-то я зависла 😵‍💫 Спроси ещё раз чуть позже.",
+                             link_preview_options=NO_PREVIEW if searches else None)
 
 
 def _parse_date(value, default: date) -> date:
