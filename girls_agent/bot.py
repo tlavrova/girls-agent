@@ -12,6 +12,7 @@ Messages to users are in Russian: the bot serves a Russian-speaking group.
 from __future__ import annotations
 
 import asyncio
+import base64
 import functools
 import html
 import json
@@ -448,17 +449,47 @@ def addresses_gigi(message, bot) -> bool:
     reply = message.reply_to_message
     if reply and reply.from_user and reply.from_user.id == bot.id:
         return True
-    for entity, text in message.parse_entities([MessageEntityType.MENTION, MessageEntityType.TEXT_MENTION]).items():
+    kinds = [MessageEntityType.MENTION, MessageEntityType.TEXT_MENTION]
+    mentions = {**message.parse_entities(kinds), **message.parse_caption_entities(kinds)}  # a photo has a caption
+    for entity, text in mentions.items():
         if text.lower() == f"@{bot.username}".lower() or (entity.user and entity.user.id == bot.id):
             return True
     return False
+
+
+def links(message) -> list:
+    """URLs in a message or its caption, including hidden ones behind link text."""
+    kinds = [MessageEntityType.URL, MessageEntityType.TEXT_LINK]
+    found = {**message.parse_entities(kinds), **message.parse_caption_entities(kinds)}
+    urls = []
+    for entity, text in found.items():
+        url = entity.url if entity.type == MessageEntityType.TEXT_LINK else text
+        if not url.lower().startswith(("http://", "https://")):
+            url = "https://" + url
+        urls.append(url)
+    return urls
+
+
+async def photo_url(message) -> Optional[str]:
+    """The message's photo as a data: URL for the model, or None. Telegram's largest size is at most 1280 px."""
+    if not message or not message.photo:
+        return None
+    try:
+        data = await (await message.photo[-1].get_file()).download_as_bytearray()
+    except TelegramError as e:
+        log.warning("photo download failed: %s", e)
+        return None
+    return "data:image/jpeg;base64," + base64.b64encode(bytes(data)).decode()
 
 
 async def assistant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message, cfg, bot = update.effective_message, _cfg(context), context.bot
     if not addresses_gigi(message, bot):
         return
-    question = re.sub(f"@{re.escape(bot.username)}", "", message.text, flags=re.IGNORECASE).strip()
+    text = message.text or message.caption or ""
+    question = re.sub(f"@{re.escape(bot.username)}", "", text, flags=re.IGNORECASE).strip()
+    if not question and message.photo:
+        question = "(прислала картинку)"
     if not question:
         await message.reply_text("Да-да? 💁‍♀️")
         return
@@ -472,20 +503,27 @@ async def assistant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     counts[key] = counts.get(key, 0) + 1
 
-    reply = message.reply_to_message
-    replied_text = (reply.text or reply.caption) if reply else None
-    messages = llm.build_messages(
-        question, now, author=display_name(update.effective_user),
-        group=llm.load_group(cfg.group_file, cfg.weather_city),
-        plans=plans_for_llm(_db(context), message.chat_id, now.date()),
-        facts=[f"[#{f['id']}] {f['fact']}" for f in _db(context).facts(message.chat_id, update.effective_user.id)],
-        replied_text=replied_text,
-        replied_is_gigi=bool(reply and reply.from_user and reply.from_user.id == bot.id),
-        search=bool(cfg.search_api_key),
-        exclusions=[f"[#{e['id']}] {e['what']}" for e in _db(context).exclusions(message.chat_id)],
-    )
     typing = asyncio.create_task(keep_typing(bot, message.chat_id))
     try:
+        reply = message.reply_to_message
+        replied_text = (reply.text or reply.caption) if reply else None
+        replied_is_gigi = bool(reply and reply.from_user and reply.from_user.id == bot.id)
+        # links and a photo count from the message itself or the one it replies to ("@Gigi сохрани" under a link);
+        # not from Gigi's own messages: their map links would cost a read on every reply to her
+        urls = links(message) + (links(reply) if reply and not replied_is_gigi else [])
+        pages = await search.read_pages(cfg.search_api_key, urls, now.date(), cfg.search_daily_limit)
+        image = await photo_url(message) or await photo_url(reply)
+        messages = llm.build_messages(
+            question, now, author=display_name(update.effective_user),
+            group=llm.load_group(cfg.group_file, cfg.weather_city),
+            plans=plans_for_llm(_db(context), message.chat_id, now.date()),
+            facts=[f"[#{f['id']}] {f['fact']}" for f in _db(context).facts(message.chat_id, update.effective_user.id)],
+            replied_text=replied_text,
+            replied_is_gigi=replied_is_gigi,
+            search=bool(cfg.search_api_key),
+            exclusions=[f"[#{e['id']}] {e['what']}" for e in _db(context).exclusions(message.chat_id)],
+            pages=pages, image=image,
+        )
         await answer_with_llm(message, _db(context), cfg, messages, now)
     finally:
         typing.cancel()
@@ -741,7 +779,7 @@ async def save_requested_idea(message, db: Database, args: dict) -> None:
     if not title:
         await message.reply_text("Не поняла, что сохранить 🤔 Напиши название места.")
         return
-    details = planner.truncate(str(args.get("details") or "").strip(), 300)
+    details = planner.truncate(str(args.get("details") or "").strip(), 500)  # address, date, price and a link
     idea_id = db.add_idea(message.chat_id, kind, title, details, display_name(message.from_user))
     await message.reply_text(f"{planner.KIND_EMOJI[kind]} Сохранила в банк идей: {title}. "
                              f"Предложу, когда будем выбирать досуг.\nНе то? /unidea {idea_id}")
@@ -1082,6 +1120,9 @@ def build_app(cfg: Config) -> Application:
     if cfg.llm_api_key:
         app.add_handler(MessageHandler(filters.UpdateType.MESSAGE & filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, assistant,
             block=False))  # LLM answers take up to a minute: don't hold up commands and votes
+        # a screenshot or a poster with "@Gigi" in the caption
+        app.add_handler(MessageHandler(filters.UpdateType.MESSAGE & filters.ChatType.GROUPS & filters.PHOTO, assistant,
+            block=False))
     app.add_error_handler(on_error)
 
     jq = app.job_queue
