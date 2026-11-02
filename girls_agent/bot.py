@@ -80,6 +80,7 @@ COMMANDS = [
     ("agenda", "ближайшие встречи и планы"),
     ("cancel", "отменить ближайшую встречу"),
     ("unplan", "удалить план: /unplan 12 (номер из /agenda)"),
+    ("unremind", "отменить напоминание: /unremind 3 (номер из /agenda)"),
 ]
 
 HELP = (
@@ -92,7 +93,7 @@ HELP = (
     "📒 Записываю план в общую повестку (/agenda)\n"
     "☀️ По утрам — пожелание, главная новость и погода\n"
     "🌙 Каждый вечер желаю всем спокойной ночи\n"
-    "💬 Тегни меня или ответь на моё сообщение — поболтаем. Могу сделать опрос, подсказать погоду или запомнить план: «запомни, в субботу в 19:00 идём в кафе X». Пришли мне ресторан или совет (крем, магазин, мастер) — запишу\n\n"
+    "💬 Тегни меня или ответь на моё сообщение — поболтаем. Могу сделать опрос, подсказать погоду или запомнить план: «запомни, в субботу в 19:00 идём в кафе X», напомнить всем накануне. Пришли мне ресторан или совет (крем, магазин, мастер) — запишу\n\n"
     "<b>Команды</b>\n"
     + "".join(f"/{name} — {text}\n" for name, text in COMMANDS)
     + "\nВиды идей: ресторан, вечеринка, мероприятие."
@@ -138,6 +139,17 @@ def plan_line(p, links: bool = False) -> str:
         place = f'<a href="{html.escape(maps_url(p["place"]))}">{html.escape(p["place"])}</a>' if links else p["place"]
         line += f", {place}"
     return line + (esc(f" ({p['who']})") if p["who"] else "")
+
+
+def reminder_line(r, tz) -> str:
+    """ "сб, 7 ноября, 10:00 — всем: завтра ужин в Moeders" in the chat's time zone."""
+    at = datetime.fromisoformat(r["at"]).astimezone(tz)
+    whom = "всем" if r["user_id"] is None else (r["added_by"] or "автору")
+    return f"{human_date(at.date().isoformat())}, {at:%H:%M} — {whom}: {r['text']}"
+
+
+def reminders_for_llm(db: Database, chat_id: int, tz) -> str:
+    return "\n".join(f"[#{r['id']}] {reminder_line(r, tz)}" for r in db.reminders(chat_id))
 
 
 def plans_for_llm(db: Database, chat_id: int, today: date) -> str:
@@ -339,6 +351,29 @@ async def monthly_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             log.warning("monthly poll failed for %s: %s", chat_id, e)
 
 
+async def send_reminder(bot: Bot, db: Database, r) -> None:
+    """Deleted before it's sent, so a reminder goes out once even if sending fails."""
+    if not db.delete_reminder(r["chat_id"], r["id"]):
+        return
+    if r["user_id"] is None:
+        people = [mention(m["user_id"], m["name"]) for m in db.members(r["chat_id"])]
+    else:
+        people = [mention(r["user_id"], r["added_by"] or "ты")]
+    text = f"⏰ Напоминаю: {html.escape(r['text'])}"
+    if people:
+        text += "\n" + ", ".join(people)
+    await bot.send_message(r["chat_id"], text, parse_mode=ParseMode.HTML)
+
+
+async def due_reminders_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    db = _db(context)
+    for r in db.due_reminders(datetime.now(timezone.utc)):
+        try:
+            await send_reminder(context.bot, db, r)
+        except TelegramError as e:
+            log.warning("reminder %s failed in %s: %s", r["id"], r["chat_id"], e)
+
+
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
     for poll in db.open_polls():
@@ -508,6 +543,7 @@ async def assistant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             question, now, author=display_name(update.effective_user),
             group=llm.load_group(cfg.group_file, cfg.weather_city),
             plans=plans_for_llm(_db(context), message.chat_id, now.date()),
+            reminders=reminders_for_llm(_db(context), message.chat_id, cfg.tz),
             facts=[f"[#{f['id']}] {f['fact']}" for f in _db(context).facts(message.chat_id, update.effective_user.id)],
             replied_text=replied_text,
             replied_is_gigi=replied_is_gigi,
@@ -596,6 +632,12 @@ async def answer_with_llm(message, db: Database, cfg: Config, messages: list, no
         return
     if call and call[0] == "update_plan":
         await update_requested_plan(message, db, call[1], now.date())
+        return
+    if call and call[0] == "set_reminder":
+        await save_requested_reminder(message, db, call[1], now)
+        return
+    if call and call[0] == "delete_reminder":
+        await delete_requested_reminder(message, db, call[1].get("id"), now.tzinfo)
         return
     if call and call[0] == "delete_plan":
         await delete_requested_plan(message, db, call[1].get("id"))
@@ -753,6 +795,42 @@ async def delete_requested_plan(message, db: Database, plan_id) -> None:
         await message.reply_text("Не нашла такой план 🤔 Посмотри номера в /agenda.")
         return
     await message.reply_text(f"Удалила 🗑 {plan_line(plan)}")
+
+
+REMINDER_TIME = "10:00"  # when "напомни за день" doesn't say the time
+
+
+async def save_requested_reminder(message, db: Database, args: dict, now: datetime) -> None:
+    """A reminder asked for in plain language; the LLM already worked out the date from the plan."""
+    text = planner.truncate(str(args.get("text") or "").strip(), 300)
+    try:
+        day = date.fromisoformat(str(args.get("date")))
+    except ValueError:
+        day = None
+    if day is None or not text:
+        await message.reply_text("Не поняла, о чём и когда напомнить 🤔 Скажи, например: «напомни всем в пятницу в 10:00 про ужин».")
+        return
+    time = str(args.get("time") or "").strip()
+    time = time if TIME_RE.fullmatch(time) else REMINDER_TIME
+    at = datetime.combine(day, datetime.strptime(time, "%H:%M").time(), tzinfo=now.tzinfo)
+    if at <= now:
+        await message.reply_text(f"{human_date(day.isoformat())}, {time} уже прошло — напомнить не успею 🙃")
+        return
+    everyone = args.get("everyone") is not False  # a reminder in a group chat is usually for everyone
+    user = message.from_user
+    reminder_id = db.add_reminder(message.chat_id, at, text, user_id=None if everyone else user.id,
+                                  added_by=display_name(user))
+    whom = "всем" if everyone else "тебе"
+    await message.reply_text(f"⏰ Напомню {whom} {human_date(day.isoformat())} в {time}: {text}\n"
+                             f"Отменить: /unremind {reminder_id}")
+
+
+async def delete_requested_reminder(message, db: Database, reminder_id, tz) -> None:
+    reminder = db.delete_reminder(message.chat_id, _plan_id(reminder_id))
+    if not reminder:
+        await message.reply_text("Не нашла такое напоминание 🤔 Посмотри номера в /agenda.")
+        return
+    await message.reply_text(f"Отменила напоминание 🗑 {reminder_line(reminder, tz)}")
 
 
 def _plan_id(value) -> int:
@@ -940,6 +1018,13 @@ async def unplan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await delete_requested_plan(update.effective_message, _db(context), context.args[0])
 
 
+async def unremind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.effective_message.reply_text("Напиши номер напоминания из /agenda, например: /unremind 3")
+        return
+    await delete_requested_reminder(update.effective_message, _db(context), context.args[0], _cfg(context).tz)
+
+
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = HELP.format(poll_day=_cfg(context).poll_day)
     if update.effective_chat.type == update.effective_chat.PRIVATE:
@@ -1015,7 +1100,8 @@ async def agenda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     today = datetime.now(_cfg(context).tz).date().isoformat()
     meetings = _db(context).upcoming_meetings(update.effective_chat.id, today)
     plans = _db(context).upcoming_plans(update.effective_chat.id, today)
-    if not meetings and not plans:
+    reminders = _db(context).reminders(update.effective_chat.id)
+    if not meetings and not plans and not reminders:
         await update.effective_message.reply_text("В повестке пока пусто. Запустить опрос по датам — /poll")
         return
     lines = ["📒 <b>Общая повестка</b>"]
@@ -1029,6 +1115,10 @@ async def agenda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         lines.append("\n📌 <b>Планы</b>")
         lines.extend(f"#{p['id']} {plan_line(p, links=True)}" for p in plans)
         lines.append("<i>Удалить: /unplan номер</i>")
+    if reminders:
+        lines.append("\n⏰ <b>Напоминания</b>")
+        lines.extend(f"#{r['id']} {html.escape(reminder_line(r, _cfg(context).tz))}" for r in reminders)
+        lines.append("<i>Отменить: /unremind номер</i>")
     await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML,
                                               link_preview_options=NO_PREVIEW)
 
@@ -1100,6 +1190,7 @@ def build_app(cfg: Config) -> Application:
     app.add_handler(CommandHandler("agenda", agenda_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("cancel", cancel_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("unplan", unplan_cmd, filters.ChatType.GROUPS))
+    app.add_handler(CommandHandler("unremind", unremind_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("unidea", unidea_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("recs", recs_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("memory", memory_cmd, filters.ChatType.GROUPS))
@@ -1124,6 +1215,7 @@ def build_app(cfg: Config) -> Application:
     if cfg.goodnight_time:
         jq.run_daily(goodnight_job, dtime(*cfg.goodnight_time, tzinfo=cfg.tz), name="goodnight")
     jq.run_repeating(close_due_job, interval=600, first=10, name="close_due")
+    jq.run_repeating(due_reminders_job, interval=60, first=15, name="due_reminders")
     jq.run_daily(forget_old_plans_job, dtime(4, 0, tzinfo=cfg.tz), name="forget_old_plans")
     return app
 

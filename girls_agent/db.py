@@ -1,4 +1,5 @@
-"""SQLite storage: chats, members, polls, votes, ideas, meetings (the shared agenda), plans, recommendations and facts."""
+"""SQLite storage: chats, members, polls, votes, ideas, meetings (the shared agenda), plans, reminders,
+recommendations and facts."""
 from __future__ import annotations
 
 import json
@@ -84,6 +85,15 @@ CREATE TABLE IF NOT EXISTS plans (           -- "запомни, в суббот
     what       TEXT NOT NULL,
     place      TEXT NOT NULL DEFAULT '',
     who        TEXT NOT NULL DEFAULT '',
+    added_by   TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS reminders (       -- "напомни всем за день до ужина"; deleted once sent
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id    INTEGER NOT NULL,
+    at         TEXT NOT NULL,          -- UTC ISO time to send it
+    text       TEXT NOT NULL,
+    user_id    INTEGER,                -- whom to remind; NULL = everyone in the chat
     added_by   TEXT,
     created_at TEXT NOT NULL
 );
@@ -329,6 +339,34 @@ class Database:
             "SELECT * FROM plans WHERE chat_id = ? AND date >= ? ORDER BY date, time",
             (chat_id, from_date),
         ))
+
+    # --- reminders ---
+
+    def add_reminder(self, chat_id: int, at: datetime, text: str, *, user_id: Optional[int] = None,
+                     added_by: str = "") -> int:
+        cur = self._exec(
+            "INSERT INTO reminders (chat_id, at, text, user_id, added_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (chat_id, at.astimezone(timezone.utc).isoformat(), text, user_id, added_by, _now()),
+        )
+        return cur.lastrowid
+
+    def reminders(self, chat_id: int) -> List[sqlite3.Row]:
+        return list(self.conn.execute("SELECT * FROM reminders WHERE chat_id = ? ORDER BY at", (chat_id,)))
+
+    def due_reminders(self, now: datetime) -> List[sqlite3.Row]:
+        return list(self.conn.execute("SELECT * FROM reminders WHERE at <= ? ORDER BY at",
+                                      (now.astimezone(timezone.utc).isoformat(),)))
+
+    def delete_reminder(self, chat_id: int, reminder_id: int) -> Optional[sqlite3.Row]:
+        """The deleted reminder, or None if there's no such reminder in this chat (or it's already gone).
+
+        Sending deletes it first too, so a reminder is never sent twice.
+        """
+        row = self.conn.execute("SELECT * FROM reminders WHERE id = ? AND chat_id = ?",
+                                (reminder_id, chat_id)).fetchone()
+        if row and self._exec("DELETE FROM reminders WHERE id = ?", (reminder_id,)).rowcount:
+            return row
+        return None
 
     # --- facts about members ---
 

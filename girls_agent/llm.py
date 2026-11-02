@@ -51,6 +51,12 @@ PERSONA = (
     "Просят удалить, отменить, перенести или поправить план — вызови delete_plan или update_plan с его номером "
     "из списка «Планы». Номер бери только у того самого плана; если подходящего плана с номером нет "
     "(например, это общая встреча), ничего не вызывай, а скажи, что общую встречу отменяют командой /cancel. "
+    "Просят напомнить («напомни всем за день до ужина», «напомни мне в пятницу взять купальник») — set_reminder: "
+    "дату и время плана бери из «Планов», «за день» — накануне в 10:00, если время не назвали; «всем» или "
+    "про общий план — everyone, «мне» — только автору. Просят отменить напоминание — delete_reminder с номером "
+    "из списка «Напоминания». "
+    "Просят забронировать столик или купить билеты — сама ты этого сделать не можешь, так и скажи одной фразой, "
+    "дай ссылку, где это сделать (см. правила о местах ниже), и предложи записать план и напомнить всем накануне. "
     "Прислали место, куда можно сходить вместе (ресторан, кафе, бар, вечеринку, выставку, концерт) или ссылку на него, "
     "даже без слов «запомни» и без вопроса, — сохрани через save_idea. "
     "Советуют вещь или услугу (косметику, одежду, бельё, еду, магазин, мастера, врача) — save_recommendation; "
@@ -89,6 +95,7 @@ PLACES_NO_SEARCH = (
     "без выдуманного адреса. Общее направление («итальянская кухня», "
     "«бар с живой музыкой») подсказать можно. Названия, которые прислали подруги или которые есть в «Планах», "
     "называть можно, но без выдуманных подробностей. "
+    "Для бронирования дай ссылку на место в Google Maps: там обычно есть сайт и телефон. "
 )
 
 PLACES_SEARCH = (
@@ -99,6 +106,8 @@ PLACES_SEARCH = (
     "одна строка о том, что это, адрес, если он есть в результатах, и ссылка из результатов, голым URL без Markdown. "
     "Ничего не добавляй от себя: чего нет в результатах, того ты не знаешь. Подходящего не нашлось — так и скажи. "
     "Учитывай, что человек рассказывал о себе и что любит группа. Мнение о месте давай только по найденным отзывам. "
+    "Для бронирования найди через web_search страницу бронирования или телефон этого места "
+    "(например, «Moeders Amsterdam reserveren») и дай ссылку из результатов. "
 )
 
 GROUP_DEFAULT = "Подруги, говорят по-русски, живут в {city}."
@@ -139,10 +148,12 @@ def build_messages(question: str, now: datetime, *, author: str = "", group: str
                    plans: Optional[str] = None, facts: Sequence[str] = (),
                    replied_text: Optional[str] = None, replied_is_gigi: bool = False,
                    search: bool = False, exclusions: Sequence[str] = (),
-                   pages: str = "", image: Optional[str] = None) -> List[dict]:
+                   pages: str = "", image: Optional[str] = None,
+                   reminders: Optional[str] = None) -> List[dict]:
     """System prompt plus at most two messages: what she replied to (if any) and the question.
 
     pages is the text of the linked pages; image is a photo as a data: URL. Both go with the question.
+    reminders is the chat's pending reminders, one per line; None leaves them out.
 
     plans is the group's upcoming plans, one per line; None leaves them out (e.g. the morning message).
     search says whether the web_search tool is offered, which changes the rules about places.
@@ -154,6 +165,8 @@ def build_messages(question: str, now: datetime, *, author: str = "", group: str
         system += f"\n\nО группе:\n{group}"
     if plans is not None:
         system += f"\n\nПланы:\n{plans or 'ничего не записано'}"
+    if reminders is not None:
+        system += f"\n\nНапоминания:\n{reminders or 'нет'}"
     if exclusions:
         system += ("\n\nНе предлагать (правило группы; места и события с этим не советуй):\n"
                    + "\n".join(f"- {e}" for e in exclusions))
@@ -283,6 +296,25 @@ TOOLS = [
         "description": "Забыть то, что автор рассказывала о себе, когда она просит или говорит, что это уже не так.",
         "parameters": {"type": "object", "properties": {
             "id": {"type": "integer", "description": "Номер факта, например 3 для [#3]"},
+        }, "required": ["id"]},
+    }},
+    {"type": "function", "function": {
+        "name": "set_reminder",
+        "description": ("Напомнить в чате в назначенное время: «напомни всем за день до ужина», "
+                        "«напомни мне в пятницу в 9 взять купальник»."),
+        "parameters": {"type": "object", "properties": {
+            "date": {"type": "string", "description": "Когда напомнить, YYYY-MM-DD"},
+            "time": {"type": "string", "description": "Во сколько, HH:MM; не названо — 10:00"},
+            "text": {"type": "string", "description": ("О чём напомнить, коротко и с подробностями плана: "
+                                                       "«завтра в 19:00 ужин в Moeders, Rozengracht 251»")},
+            "everyone": {"type": "boolean", "description": "true — отметить всех в чате, false — только автора"},
+        }, "required": ["date", "text"]},
+    }},
+    {"type": "function", "function": {
+        "name": "delete_reminder",
+        "description": "Отменить напоминание с номером [#N] из списка «Напоминания».",
+        "parameters": {"type": "object", "properties": {
+            "id": {"type": "integer", "description": "Номер напоминания"},
         }, "required": ["id"]},
     }},
     {"type": "function", "function": {
