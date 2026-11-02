@@ -17,16 +17,17 @@ class BuildMessagesTest(unittest.TestCase):
         self.assertIn("2026-10-27 14:30, вторник", messages[0]["content"])
         self.assertEqual(messages[1]["content"], "Аня: как дела?")
 
-    def test_reply_to_gigi_becomes_assistant_turn(self):
+    def test_reply_to_gigi_is_quoted_not_her_own_turn(self):
+        # as her own turn, the model copies the bot's "Сохранила …" instead of calling the tool
         messages = llm.build_messages("а почему?", datetime(2026, 10, 27, 14, 30), replied_text="Спать пора 🌙",
                                       replied_is_gigi=True)
-        self.assertEqual([m["role"] for m in messages], ["system", "assistant", "user"])
-        self.assertEqual(messages[1]["content"], "Спать пора 🌙")
+        self.assertEqual([m["role"] for m in messages], ["system", "user"])
+        self.assertIn("Gigi: Спать пора 🌙\n(конец переписки)\nа почему?", messages[1]["content"])
 
     def test_reply_to_someone_else_is_quoted(self):
-        messages = llm.build_messages("что скажешь?", datetime(2026, 10, 27, 14, 30), replied_text="Идём в кино?")
+        messages = llm.build_messages("что скажешь?", datetime(2026, 10, 27, 14, 30), replied_text="Аня: Идём в кино?")
         self.assertEqual(len(messages), 2)
-        self.assertIn("«Идём в кино?»", messages[1]["content"])
+        self.assertIn("\nАня: Идём в кино?\n", messages[1]["content"])
 
     def test_group_goes_into_system_prompt(self):
         messages = llm.build_messages("привет", datetime(2026, 10, 27, 14, 30), group="Живём в Нидерландах.")

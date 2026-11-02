@@ -88,6 +88,16 @@ CREATE TABLE IF NOT EXISTS plans (           -- "запомни, в суббот
     added_by   TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS turns (           -- messages of conversations with Gigi, to follow a reply chain back;
+    chat_id    INTEGER NOT NULL,       -- only messages addressed to her, the ones they reply to, and her answers;
+    message_id INTEGER NOT NULL,       -- deleted after a few days
+    reply_to   INTEGER,
+    author     TEXT NOT NULL DEFAULT '',
+    text       TEXT NOT NULL,
+    is_gigi    INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (chat_id, message_id)
+);
 CREATE TABLE IF NOT EXISTS reminders (       -- "напомни всем за день до ужина"; deleted once sent
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     chat_id    INTEGER NOT NULL,
@@ -339,6 +349,24 @@ class Database:
             "SELECT * FROM plans WHERE chat_id = ? AND date >= ? ORDER BY date, time",
             (chat_id, from_date),
         ))
+
+    # --- conversation turns ---
+
+    def add_turn(self, chat_id: int, message_id: int, text: str, *, reply_to: Optional[int] = None,
+                 author: str = "", is_gigi: bool = False) -> None:
+        self._exec(
+            "INSERT OR REPLACE INTO turns (chat_id, message_id, reply_to, author, text, is_gigi, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (chat_id, message_id, reply_to, author, text, int(is_gigi), _now()),
+        )
+
+    def get_turn(self, chat_id: int, message_id: int) -> Optional[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM turns WHERE chat_id = ? AND message_id = ?",
+                                 (chat_id, message_id)).fetchone()
+
+    def delete_turns_before(self, before: datetime) -> int:
+        return self._exec("DELETE FROM turns WHERE created_at < ?",
+                          (before.astimezone(timezone.utc).isoformat(),)).rowcount
 
     # --- reminders ---
 

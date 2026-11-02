@@ -91,8 +91,6 @@ HELP = (
     "🔔 Мягко напоминаю тем, кто ещё не проголосовал\n"
     "✨ Когда дата выбрана, предлагаю 3 варианта: ресторан, вечеринка или событие\n"
     "📒 Записываю план в общую повестку (/agenda)\n"
-    "☀️ По утрам — пожелание, главная новость и погода\n"
-    "🌙 Каждый вечер желаю всем спокойной ночи\n"
     "💬 Тегни меня или ответь на моё сообщение — поболтаем. Могу сделать опрос, подсказать погоду или запомнить план: «запомни, в субботу в 19:00 идём в кафе X», напомнить всем накануне. Пришли мне ресторан или совет (крем, магазин, мастер) — запишу\n\n"
     "<b>Команды</b>\n"
     + "".join(f"/{name} — {text}\n" for name, text in COMMANDS)
@@ -412,6 +410,7 @@ async def forget_old_plans_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     removed = _db(context).delete_plans_before(cutoff.isoformat())
     if removed:
         log.info("forgot %d plans from before %s", removed, cutoff)
+    _db(context).delete_turns_before(datetime.now(timezone.utc) - THREAD_RETENTION)
 
 
 async def close_due_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -508,6 +507,54 @@ async def photo_url(message) -> Optional[str]:
     return "data:image/jpeg;base64," + base64.b64encode(bytes(data)).decode()
 
 
+THREAD_DEPTH = 5           # messages of a reply chain sent to the model, counting the one replied to
+THREAD_TEXT = 1000         # characters per earlier message: enough for an answer with links
+THREAD_RETENTION = timedelta(days=3)
+
+
+def thread_before(db: Database, chat_id: int, reply) -> list:
+    """The reply chain above the replied-to message, oldest first, as (is_gigi, author, text).
+
+    Telegram only gives the message replied to, not its own reply, so the chain comes from the turns
+    Gigi saved; it stops where one is missing (an older message, or one from before she kept them).
+    """
+    chain, seen = [], set()
+    turn = db.get_turn(chat_id, reply.message_id) if reply else None
+    while turn and turn["reply_to"] and len(chain) < THREAD_DEPTH - 1 and turn["reply_to"] not in seen:
+        seen.add(turn["reply_to"])
+        turn = db.get_turn(chat_id, turn["reply_to"])
+        if turn:
+            chain.append((bool(turn["is_gigi"]), turn["author"], turn["text"][:THREAD_TEXT]))
+    return chain[::-1]
+
+
+def save_turn(db: Database, message, *, is_gigi: bool = False, author: str = "") -> None:
+    text = message.text or message.caption or ""
+    if text:
+        reply = message.reply_to_message
+        db.add_turn(message.chat_id, message.message_id, text, reply_to=reply.message_id if reply else None,
+                    author=author, is_gigi=is_gigi)
+
+
+class Recorded:
+    """The user's message, with Gigi's replies to it saved as turns so a later reply can follow the chain."""
+
+    def __init__(self, message, db: Database):
+        self._message, self._db = message, db
+
+    def __getattr__(self, name):
+        return getattr(self._message, name)
+
+    async def reply_text(self, *args, **kwargs):
+        sent = await self._message.reply_text(*args, **kwargs)
+        try:
+            self._db.add_turn(sent.chat_id, sent.message_id, sent.text or "", reply_to=self._message.message_id,
+                              is_gigi=True)
+        except (AttributeError, TypeError):
+            pass  # not a real Message (tests)
+        return sent
+
+
 async def assistant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message, cfg, bot = update.effective_message, _cfg(context), context.bot
     if not addresses_gigi(message, bot):
@@ -534,6 +581,15 @@ async def assistant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply = message.reply_to_message
         replied_text = (reply.text or reply.caption) if reply else None
         replied_is_gigi = bool(reply and reply.from_user and reply.from_user.id == bot.id)
+        if replied_text and not replied_is_gigi and reply.from_user:
+            replied_text = f"{display_name(reply.from_user)}: {replied_text}"
+        db = _db(context)
+        thread = thread_before(db, message.chat_id, reply)
+        if reply and not db.get_turn(message.chat_id, reply.message_id):
+            # a friend's message someone asked Gigi about: it becomes part of this conversation
+            save_turn(db, reply, is_gigi=replied_is_gigi,
+                      author="" if replied_is_gigi or not reply.from_user else display_name(reply.from_user))
+        save_turn(db, message, author=display_name(update.effective_user))
         # links and a photo count from the message itself or the one it replies to ("@Gigi сохрани" under a link);
         # not from Gigi's own messages: their map links would cost a read on every reply to her
         urls = links(message) + (links(reply) if reply and not replied_is_gigi else [])
@@ -547,11 +603,12 @@ async def assistant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             facts=[f"[#{f['id']}] {f['fact']}" for f in _db(context).facts(message.chat_id, update.effective_user.id)],
             replied_text=replied_text,
             replied_is_gigi=replied_is_gigi,
+            thread=thread,
             search=bool(cfg.search_api_key),
             exclusions=[f"[#{e['id']}] {e['what']}" for e in _db(context).exclusions(message.chat_id)],
             pages=pages, image=image,
         )
-        await answer_with_llm(message, _db(context), cfg, messages, now)
+        await answer_with_llm(Recorded(message, db), db, cfg, messages, now)
     finally:
         typing.cancel()
 
