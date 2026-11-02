@@ -248,7 +248,17 @@ async def finish_poll(bot: Bot, db: Database, cfg: Config, poll) -> None:
     payload = json.loads(poll["payload"])
     counts = planner.tally(db.votes(poll["poll_id"]), len(options))
 
-    if poll["kind"] == "date":
+    if poll["kind"] == "custom":
+        best = max(counts, default=0)
+        if best == 0:
+            text = f"Опрос «{html.escape(payload['question'])}» закрыт — голосов не было."
+        else:
+            winners = ", ".join(f"<b>{html.escape(o)}</b>" for o, c in zip(options, counts) if c == best)
+            text = (f"📊 Опрос «{html.escape(payload['question'])}» закрыт: {winners} "
+                    f"(голосов: {best}).")
+        await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_to_message_id=poll["message_id"])
+
+    elif poll["kind"] == "date":
         dates = payload["dates"]
         winner = planner.pick_winner(counts[: len(dates)])
         if winner is None:
@@ -312,10 +322,10 @@ async def remind(bot: Bot, db: Database, poll, *, quiet_if_done: bool) -> None:
         if not quiet_if_done:
             await bot.send_message(chat_id, "Все уже проголосовали — вы чудо 💖")
         return
-    what = "даты" if poll["kind"] == "date" else "досуг"
+    what = {"date": "за даты", "activity": "за досуг"}.get(poll["kind"], "в опросе")
     await bot.send_message(
         chat_id,
-        f"Девочки, ждём ваш голос за {what} 🙏 " + ", ".join(mention(m["user_id"], m["name"]) for m in missing),
+        f"Девочки, ждём ваш голос {what} 🙏 " + ", ".join(mention(m["user_id"], m["name"]) for m in missing),
         parse_mode=ParseMode.HTML,
         reply_to_message_id=poll["message_id"],
     )
@@ -525,7 +535,7 @@ async def answer_with_llm(message, db: Database, cfg: Config, messages: list, no
         reply_msg = await ask(messages)
     call = llm.tool_call(reply_msg) if reply_msg else None
     if call and call[0] == "create_poll":
-        await create_requested_poll(message, call[1])
+        await create_requested_poll(message, db, call[1])
         return
     if call and call[0] == "save_plan":
         await save_requested_plan(message, db, call[1], now.date())
@@ -574,8 +584,11 @@ def _parse_date(value, default: date) -> date:
         return default
 
 
-async def create_requested_poll(message, args: dict) -> None:
-    """A poll asked for in plain language; the LLM already extracted question and options."""
+async def create_requested_poll(message, db: Database, args: dict) -> None:
+    """A poll asked for in plain language; the LLM already extracted question and options.
+
+    It's stored too, so /close closes this poll and not an older date poll that is still open.
+    """
     question = planner.truncate(str(args.get("question") or "Опрос").strip(), 300)
     options = []
     for option in args.get("options") or []:
@@ -585,10 +598,11 @@ async def create_requested_poll(message, args: dict) -> None:
     if len(options) < 2:
         await message.reply_text("Для опроса нужно хотя бы два варианта. Перечисли их, и я всё сделаю 💅")
         return
+    options = options[:10]  # Telegram's limit
     try:
-        await message.chat.send_poll(
+        msg = await message.chat.send_poll(
             question=question,
-            options=options[:10],  # Telegram's limit
+            options=options,
             is_anonymous=False,
             allows_multiple_answers=bool(args.get("multiple")),
             reply_to_message_id=message.message_id,
@@ -596,7 +610,13 @@ async def create_requested_poll(message, args: dict) -> None:
     except TelegramError as e:
         log.warning("requested poll failed: %s", e)
         await message.reply_text("Telegram не дал создать опрос 🙄 Попробуй переформулировать.")
+        return
+    closes_at = datetime.now(timezone.utc) + CUSTOM_POLL_OPEN
+    db.add_poll(msg.poll.id, message.chat.id, msg.message_id, "custom", options,
+                {"question": question}, closes_at)
 
+
+CUSTOM_POLL_OPEN = timedelta(days=3)  # then Gigi closes it and posts the result
 
 TIME_RE = re.compile(r"([01]?\d|2[0-3]):[0-5]\d")
 OVERLAP = timedelta(hours=2)  # plans this close on the same day probably clash

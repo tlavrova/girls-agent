@@ -122,6 +122,7 @@ To update a running server, run `deploy/setup.sh` again: it pulls the latest ima
 Group feedback (2026-10-29): several members find the scheduled posts clutter the chat and want Gigi to "just do the job". They don't like the good-night jokes ("like forwarded memes from a relative") or the bad news in the morning message, and they read news themselves. So:
 
 1. ~~**Scheduled posts off by default**~~ (done): `GOODNIGHT_TIME` and `MORNING_TIME` are off unless set. Gigi speaks only when asked, plus the meetup flow.
+2. **No pinning** (feedback 2026-11-02): when the plan is ready, Gigi tries to pin it, and since she isn't an admin she posts "Хотела закрепить план, но у меня нет прав 📌 Сделайте меня админом…" every time. The group won't make her an admin, so drop pinning entirely, along with that message. The plan stays in `/agenda`.
 
 ## Roadmap: real places
 

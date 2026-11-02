@@ -2,7 +2,7 @@ import asyncio
 import html
 import re
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -16,13 +16,17 @@ def plain(text: str) -> str:
 
 
 class RequestedPollTest(unittest.TestCase):
-    def fake_message(self):
-        chat = SimpleNamespace(send_poll=AsyncMock())
+    def setUp(self):
+        self.db = Database(":memory:")
+
+    def fake_message(self, poll_id="p-custom"):
+        sent = SimpleNamespace(poll=SimpleNamespace(id=poll_id), message_id=8)
+        chat = SimpleNamespace(id=-100, send_poll=AsyncMock(return_value=sent))
         return SimpleNamespace(chat=chat, message_id=7, reply_text=AsyncMock())
 
     def test_creates_poll_with_clean_options(self):
         message = self.fake_message()
-        asyncio.run(bot.create_requested_poll(message, {
+        asyncio.run(bot.create_requested_poll(message, self.db, {
             "question": "Куда идём?", "options": ["Кино", " кино ", "Кино", "Бар", ""], "multiple": True}))
         kwargs = message.chat.send_poll.call_args.kwargs
         self.assertEqual(kwargs["question"], "Куда идём?")
@@ -32,9 +36,39 @@ class RequestedPollTest(unittest.TestCase):
 
     def test_needs_two_options(self):
         message = self.fake_message()
-        asyncio.run(bot.create_requested_poll(message, {"question": "?", "options": ["Кино"]}))
+        asyncio.run(bot.create_requested_poll(message, self.db, {"question": "?", "options": ["Кино"]}))
         message.chat.send_poll.assert_not_called()
         message.reply_text.assert_called_once()
+
+    def test_close_picks_the_requested_poll_not_an_old_date_poll(self):
+        # feedback: a date poll for November was still open; a custom poll about January was closed
+        # with /close, and Gigi announced "Встречаемся сб, 7 ноября"
+        later = datetime.now(timezone.utc) + timedelta(days=3)
+        self.db.add_poll("p-date", -100, 1, "date", ["сб, 7 ноября", "Не могу"],
+                         {"dates": ["2026-11-07"]}, later)
+        self.db.record_vote("p-date", 5, [0])
+        asyncio.run(bot.create_requested_poll(self.fake_message(), self.db, {
+            "question": "Когда в январе?", "options": ["16 января", "23 января"]}))
+        self.db.record_vote("p-custom", 1, [1])
+
+        poll = self.db.open_polls(-100)[0]
+        self.assertEqual(poll["poll_id"], "p-custom")
+        tg = SimpleNamespace(stop_poll=AsyncMock(), send_message=AsyncMock())
+        asyncio.run(bot.finish_poll(tg, self.db, None, poll))
+
+        text = plain(tg.send_message.call_args.args[1])
+        self.assertIn("23 января", text)
+        self.assertIn("голосов: 1", text)
+        self.assertNotIn("ноябр", text)
+        self.assertEqual(tg.send_message.call_count, 1)  # no activity poll after a custom one
+        self.assertEqual([p["poll_id"] for p in self.db.open_polls(-100)], ["p-date"])
+
+    def test_requested_poll_without_votes(self):
+        asyncio.run(bot.create_requested_poll(self.fake_message(), self.db, {
+            "question": "Кино?", "options": ["Да", "Нет"]}))
+        tg = SimpleNamespace(stop_poll=AsyncMock(), send_message=AsyncMock())
+        asyncio.run(bot.finish_poll(tg, self.db, None, self.db.get_poll("p-custom")))
+        self.assertIn("голосов не было", tg.send_message.call_args.args[1])
 
     def test_parse_date(self):
         self.assertEqual(bot._parse_date("2026-10-31", date(2026, 1, 1)), date(2026, 10, 31))
