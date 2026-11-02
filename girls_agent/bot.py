@@ -89,7 +89,7 @@ HELP = (
     "🗓 {poll_day}-го числа спрашиваю, в какие выходные следующего месяца всем удобно\n"
     "🔔 Мягко напоминаю тем, кто ещё не проголосовал\n"
     "✨ Когда дата выбрана, предлагаю 3 варианта: ресторан, вечеринка или событие\n"
-    "📒 Записываю план в общую повестку и закрепляю его в чате\n"
+    "📒 Записываю план в общую повестку (/agenda)\n"
     "☀️ По утрам — пожелание, главная новость и погода\n"
     "🌙 Каждый вечер желаю всем спокойной ночи\n"
     "💬 Тегни меня или ответь на моё сообщение — поболтаем. Могу сделать опрос, подсказать погоду или запомнить план: «запомни, в субботу в 19:00 идём в кафе X». Пришли мне ресторан или совет (крем, магазин, мастер) — запишу\n\n"
@@ -290,7 +290,7 @@ async def finish_poll(bot: Bot, db: Database, cfg: Config, poll) -> None:
         db.set_meeting_plan(meeting["id"], idea["title"], idea_details(idea))
         if idea.get("id"):
             db.mark_idea_used(idea["id"])
-        msg = await bot.send_message(
+        await bot.send_message(
             chat_id,
             f"{note}✅ <b>План готов!</b>\n"
             f"🗓 {html.escape(human_date(meeting['date']))}\n"
@@ -299,15 +299,6 @@ async def finish_poll(bot: Bot, db: Database, cfg: Config, poll) -> None:
             + "\n\nВсё сохранено в /agenda",
             parse_mode=ParseMode.HTML,
         )
-        try:  # pin it if the bot is a chat admin
-            await bot.pin_chat_message(chat_id, msg.message_id, disable_notification=True)
-        except TelegramError as e:
-            log.info("pin failed in %s: %s", chat_id, e)
-            await bot.send_message(
-                chat_id,
-                "Хотела закрепить план, но у меня нет прав 📌 "
-                "Сделайте меня админом с правом «Закреплять сообщения» — и в следующий раз закреплю сама.",
-            )
 
 
 async def remind(bot: Bot, db: Database, poll, *, quiet_if_done: bool) -> None:
