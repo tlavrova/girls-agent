@@ -136,12 +136,3 @@ def idea_option(idea: dict) -> str:
 def truncate(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
-
-def parse_idea(text: str) -> tuple:
-    """'ресторан: Сыроварня, Москва' -> ('ресторан', 'Сыроварня, Москва')."""
-    text = text.strip()
-    head, sep, tail = text.partition(":")
-    kind = head.strip().lower()
-    if sep and kind in KIND_EMOJI and tail.strip():
-        return kind, tail.strip()
-    return "идея", text

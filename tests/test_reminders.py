@@ -29,7 +29,7 @@ class SaveReminderTest(unittest.TestCase):
         self.assertEqual(datetime.fromisoformat(r["at"]), datetime(2026, 11, 6, 10, 0, tzinfo=TZ))
         self.assertIn("Напомню всем", reply)
         self.assertIn("10:00", reply)
-        self.assertIn(f"/unremind {r['id']}", reply)
+        self.assertIn(f"отмени напоминание {r['id']}", reply)
 
     def test_only_me(self):
         reply = self.save({"date": "2026-11-06", "time": "09:30", "text": "взять купальник", "everyone": False})

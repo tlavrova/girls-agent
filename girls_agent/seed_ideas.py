@@ -1,4 +1,4 @@
-"""Starter ideas, used until the group adds its own via /idea. Shown to users, so in Russian."""
+"""Starter ideas, used until the group saves its own. Shown to users, so in Russian."""
 
 SEED_IDEAS = [
     {"kind": "ресторан", "title": "Ужин в новом ресторане", "details": "Выбрать место, где никто из нас ещё не был"},

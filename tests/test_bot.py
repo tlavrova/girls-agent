@@ -280,7 +280,7 @@ class FactsTest(unittest.TestCase):
         return message.reply_text.call_args.args[0]
 
     def test_remember_and_forget_by_wording(self):
-        self.assertIn("/forget", self.reply(bot.remember_requested, "не любит суши"))
+        self.assertIn("забудь", self.reply(bot.remember_requested, "не любит суши"))
         self.assertEqual([f["fact"] for f in self.db.facts(-100, 1)], ["не любит суши"])
         self.assertIn("Забыла", self.reply(bot.forget_fact_requested, self.db.facts(-100, 1)[0]["id"]))
         self.assertEqual(self.db.facts(-100, 1), [])

@@ -63,24 +63,14 @@ PLAN_RETENTION_DAYS = 7
 
 # (command, description) for /help and the Telegram command menu
 COMMANDS = [
-    ("join", "я участвую, напоминай мне"),
-    ("leave", "больше не напоминать мне"),
     ("poll", "опрос по датам прямо сейчас"),
-    ("remind", "напомнить тем, кто не проголосовал"),
     ("close", "подвести итоги опроса досрочно"),
-    ("idea", "сохранить идею: /idea ресторан: Название, адрес"),
     ("ideas", "банк идей"),
     ("unidea", "удалить идею: /unidea 12 (номер из /ideas)"),
     ("recs", "что советовали: косметика, одежда, еда…"),
-    ("stoplist", "что группе не предлагать"),
-    ("unstop", "снова можно предлагать: /unstop 2 (номер из /stoplist)"),
-    ("memory", "что я о тебе помню"),
-    ("forget", "забыть факт о тебе: /forget 3 (номер из /memory)"),
     ("unrec", "удалить совет: /unrec 5 (номер из /recs)"),
     ("agenda", "ближайшие встречи и планы"),
-    ("cancel", "отменить ближайшую встречу"),
     ("unplan", "удалить план: /unplan 12 (номер из /agenda)"),
-    ("unremind", "отменить напоминание: /unremind 3 (номер из /agenda)"),
 ]
 
 HELP = (
@@ -94,7 +84,6 @@ HELP = (
     "💬 Тегни меня или ответь на моё сообщение — поболтаем. Могу сделать опрос, подсказать погоду или запомнить план: «запомни, в субботу в 19:00 идём в кафе X», напомнить всем накануне. Пришли мне ресторан или совет (крем, магазин, мастер) — запишу\n\n"
     "<b>Команды</b>\n"
     + "".join(f"/{name} — {text}\n" for name, text in COMMANDS)
-    + "\nВиды идей: ресторан, вечеринка, мероприятие."
 )
 
 
@@ -182,8 +171,7 @@ async def start_date_poll(bot: Bot, db: Database, cfg: Config, chat_id: int) -> 
                 {"dates": [d.isoformat() for d in dates]}, closes_at)
     await bot.send_message(
         chat_id,
-        f"Голосуем до {closes_at.astimezone(cfg.tz):%d.%m %H:%M}. "
-        "Если вас нет в моём списке для напоминаний — нажмите /join.",
+        f"Голосуем до {closes_at.astimezone(cfg.tz):%d.%m %H:%M}. Тем, кто не успеет, напомню 🔔",
         reply_to_message_id=msg.message_id,
     )
 
@@ -316,7 +304,7 @@ async def remind(bot: Bot, db: Database, poll, *, quiet_if_done: bool) -> None:
     members = db.members(chat_id)
     if not members:
         if not quiet_if_done:
-            await bot.send_message(chat_id, "Я пока никого не знаю 🙈 Нажмите /join, чтобы я могла напоминать.")
+            await bot.send_message(chat_id, "Я пока никого не знаю 🙈 Напишите что-нибудь в чат, чтобы я могла напоминать.")
         return
     voted = db.voter_ids(poll["poll_id"])
     missing = [m for m in members if m["user_id"] not in voted]
@@ -879,7 +867,7 @@ async def save_requested_reminder(message, db: Database, args: dict, now: dateti
                                   added_by=display_name(user))
     whom = "всем" if everyone else "тебе"
     await message.reply_text(f"⏰ Напомню {whom} {human_date(day.isoformat())} в {time}: {text}\n"
-                             f"Отменить: /unremind {reminder_id}")
+                             f"Отменить: «@Gigi отмени напоминание {reminder_id}»")
 
 
 async def delete_requested_reminder(message, db: Database, reminder_id, tz) -> None:
@@ -898,7 +886,7 @@ def _plan_id(value) -> int:
 
 
 async def save_requested_idea(message, db: Database, args: dict) -> None:
-    """A place or event sent to Gigi without /idea; the confirmation says how to undo a wrong guess."""
+    """A place or event sent to Gigi; the confirmation says how to undo a wrong guess."""
     kind = str(args.get("kind") or "").strip().lower()
     kind = kind if kind in planner.KIND_EMOJI else "идея"
     title = planner.truncate(str(args.get("title") or "").strip(), 100)
@@ -976,31 +964,15 @@ async def exclude_requested(message, db: Database, what) -> None:
         await message.reply_text("Не поняла, что не предлагать 🤔")
         return
     if len(db.exclusions(message.chat_id)) >= MAX_EXCLUSIONS:
-        await message.reply_text("Список «не предлагать» уже длинный, пора что-то вычеркнуть 🙃 Посмотри /stoplist.")
+        await message.reply_text("Список «не предлагать» уже длинный, пора что-то вычеркнуть 🙃 Спроси меня, что в нём.")
         return
     exclusion_id = db.add_exclusion(message.chat_id, what, display_name(message.from_user))
-    await message.reply_text(f"Больше не предлагаю 🚫 {what}\nСписок — /stoplist, вернуть — /unstop {exclusion_id}")
+    await message.reply_text(f"Больше не предлагаю 🚫 {what}\nВернуть: «@Gigi {what} снова можно»")
 
 
 def allow_again_text(db: Database, chat_id: int, exclusion_id) -> str:
     row = db.delete_exclusion(chat_id, _plan_id(exclusion_id))
-    return f"Снова можно предлагать ✅ {row['what']}" if row else "Не нашла такого правила 🤔 Номера — в /stoplist."
-
-
-async def stoplist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    rows = _db(context).exclusions(update.effective_chat.id)
-    if not rows:
-        await update.effective_message.reply_text(
-            "Список пуст: предлагаю всё. Если что-то не нравится: «@Gigi не предлагай нам караоке» 🚫")
-        return
-    lines = ["🚫 Не предлагаю:"] + [f"#{r['id']} {r['what']}" + (f" ({r['added_by']})" if r["added_by"] else "")
-                                  for r in rows] + ["Снова можно: /unstop номер"]
-    await update.effective_message.reply_text("\n".join(lines))
-
-
-async def unstop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text(
-        allow_again_text(_db(context), update.effective_chat.id, context.args[0] if context.args else ""))
+    return f"Снова можно предлагать ✅ {row['what']}" if row else "Не нашла такого правила 🤔"
 
 
 MAX_FACTS = 30  # per person: keeps the prompt short
@@ -1012,10 +984,10 @@ async def remember_requested(message, db: Database, fact) -> None:
         await message.reply_text("Не поняла, что запомнить 🤔")
         return
     if len(db.facts(message.chat_id, message.from_user.id)) >= MAX_FACTS:
-        await message.reply_text("Я уже столько про тебя помню, что пора что-то забыть 🙃 Посмотри /memory.")
+        await message.reply_text("Я уже столько про тебя помню, что пора что-то забыть 🙃 Спроси, что я о тебе помню.")
         return
     fact_id = db.add_fact(message.chat_id, message.from_user.id, fact)
-    await message.reply_text(f"Запомнила 🧠 {fact}\nЧто я о тебе помню — /memory, забыть — /forget {fact_id}")
+    await message.reply_text(f"Запомнила 🧠 {fact}\nПередумаешь — скажи «@Gigi забудь это»")
 
 
 async def forget_fact_requested(message, db: Database, fact_id) -> None:
@@ -1029,25 +1001,7 @@ async def forget_fact_requested(message, db: Database, fact_id) -> None:
         await message.reply_text("Я про тебя пока ничего не помню 🤷‍♀️")
     else:
         await message.reply_text("Не поняла, что забыть. Вот что я помню:\n"
-                                 + "\n".join(f"/forget {f['id']} — {f['fact']}" for f in facts))
-
-
-async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """What Gigi remembers about you; each person sees only their own facts."""
-    facts = _db(context).facts(update.effective_chat.id, update.effective_user.id)
-    if not facts:
-        await update.effective_message.reply_text(
-            "Я про тебя пока ничего не помню. Расскажи: «@Gigi запомни, я не ем мясо» 💌")
-        return
-    lines = ["🧠 Что я о тебе помню:"] + [f"#{f['id']} {f['fact']}" for f in facts] + ["Забыть: /forget номер"]
-    await update.effective_message.reply_text("\n".join(lines))
-
-
-async def forget_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    fact = _db(context).delete_fact(update.effective_chat.id, update.effective_user.id,
-                                    _plan_id(context.args[0] if context.args else ""))
-    await update.effective_message.reply_text(
-        f"Забыла 🫥 {fact['fact']}" if fact else "Не нашла такого среди того, что я о тебе помню. Номера — в /memory.")
+                                 + "\n".join(f"#{f['id']} {f['fact']}" for f in facts))
 
 
 async def recs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1075,28 +1029,11 @@ async def unplan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await delete_requested_plan(update.effective_message, _db(context), context.args[0])
 
 
-async def unremind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.args:
-        await update.effective_message.reply_text("Напиши номер напоминания из /agenda, например: /unremind 3")
-        return
-    await delete_requested_reminder(update.effective_message, _db(context), context.args[0], _cfg(context).tz)
-
-
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = HELP.format(poll_day=_cfg(context).poll_day)
     if update.effective_chat.type == update.effective_chat.PRIVATE:
         text += "\n<i>Добавьте меня в групповой чат компании — там я и работаю.</i>"
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
-
-
-async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # track_chat already registered the member; just reply
-    await update.effective_message.reply_text(f"Записала, {display_name(update.effective_user)}! 💌")
-
-
-async def leave_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    _db(context).remove_member(update.effective_chat.id, update.effective_user.id)
-    await update.effective_message.reply_text("Хорошо, больше не буду напоминать.")
 
 
 async def poll_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1107,14 +1044,6 @@ async def poll_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await start_date_poll(context.bot, db, cfg, update.effective_chat.id)
 
 
-async def remind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    polls = _db(context).open_polls(update.effective_chat.id)
-    if not polls:
-        await update.effective_message.reply_text("Сейчас нет открытых опросов.")
-        return
-    await remind(context.bot, _db(context), polls[0], quiet_if_done=False)
-
-
 async def close_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     polls = _db(context).open_polls(update.effective_chat.id)
     if not polls:
@@ -1123,25 +1052,11 @@ async def close_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await finish_poll(context.bot, _db(context), _cfg(context), polls[0])
 
 
-async def idea_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = " ".join(context.args).strip()
-    if not text:
-        await update.effective_message.reply_text(
-            "Напишите идею после команды, например:\n/idea ресторан: Сыроварня на Красном Октябре")
-        return
-    kind, title = planner.parse_idea(text)
-    title, _, details = title.partition(" — ")
-    _db(context).add_idea(update.effective_chat.id, kind, title.strip(), details.strip(),
-                          display_name(update.effective_user))
-    await update.effective_message.reply_text(
-        f"{planner.KIND_EMOJI[kind]} Сохранила в банк идей! Предложу, когда будем выбирать досуг.")
-
-
 async def ideas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ideas = _db(context).unused_ideas(update.effective_chat.id)
     if not ideas:
         await update.effective_message.reply_text(
-            "Банк идей пуст — пока буду предлагать стартовые варианты. Добавьте свои через /idea")
+            "Банк идей пуст — пока буду предлагать стартовые варианты. Пришлите мне место или ссылку: «@Gigi сохрани, хотим сюда сходить»")
         return
     lines = ["<b>Банк идей</b>"]
     for i in ideas[:30]:
@@ -1175,21 +1090,9 @@ async def agenda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if reminders:
         lines.append("\n⏰ <b>Напоминания</b>")
         lines.extend(f"#{r['id']} {html.escape(reminder_line(r, _cfg(context).tz))}" for r in reminders)
-        lines.append("<i>Отменить: /unremind номер</i>")
+        lines.append("<i>Отменить: «@Gigi отмени напоминание номер»</i>")
     await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML,
                                               link_preview_options=NO_PREVIEW)
-
-
-async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db = _db(context)
-    today = datetime.now(_cfg(context).tz).date().isoformat()
-    meetings = db.upcoming_meetings(update.effective_chat.id, today)
-    if not meetings:
-        await update.effective_message.reply_text("Отменять нечего — встреч в повестке нет.")
-        return
-    db.cancel_meeting(meetings[0]["id"])
-    await update.effective_message.reply_text(
-        f"Отменила встречу {human_date(meetings[0]['date'])}. Новый опрос — /poll")
 
 
 async def poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1237,23 +1140,13 @@ def build_app(cfg: Config) -> Application:
     app.add_handler(TypeHandler(Update, guard), group=-2)
     app.add_handler(MessageHandler(filters.ChatType.GROUPS, track_chat), group=-1)
     app.add_handler(CommandHandler(["start", "help"], start_cmd))
-    app.add_handler(CommandHandler("join", join_cmd, filters.ChatType.GROUPS))
-    app.add_handler(CommandHandler("leave", leave_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("poll", poll_cmd, filters.ChatType.GROUPS))
-    app.add_handler(CommandHandler("remind", remind_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("close", close_cmd, filters.ChatType.GROUPS))
-    app.add_handler(CommandHandler("idea", idea_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("ideas", ideas_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("agenda", agenda_cmd, filters.ChatType.GROUPS))
-    app.add_handler(CommandHandler("cancel", cancel_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("unplan", unplan_cmd, filters.ChatType.GROUPS))
-    app.add_handler(CommandHandler("unremind", unremind_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("unidea", unidea_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("recs", recs_cmd, filters.ChatType.GROUPS))
-    app.add_handler(CommandHandler("memory", memory_cmd, filters.ChatType.GROUPS))
-    app.add_handler(CommandHandler("stoplist", stoplist_cmd, filters.ChatType.GROUPS))
-    app.add_handler(CommandHandler("unstop", unstop_cmd, filters.ChatType.GROUPS))
-    app.add_handler(CommandHandler("forget", forget_cmd, filters.ChatType.GROUPS))
     app.add_handler(CommandHandler("unrec", unrec_cmd, filters.ChatType.GROUPS))
     app.add_handler(PollAnswerHandler(poll_answer))
     if cfg.llm_api_key:

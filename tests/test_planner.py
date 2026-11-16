@@ -51,9 +51,6 @@ class PlannerTest(unittest.TestCase):
         self.assertEqual(picked[0]["title"], "Сыроварня")
         self.assertEqual(len({p["kind"] for p in picked}), 3)
 
-    def test_parse_idea(self):
-        self.assertEqual(planner.parse_idea("Ресторан: Сыроварня"), ("ресторан", "Сыроварня"))
-        self.assertEqual(planner.parse_idea("сходить на каток"), ("идея", "сходить на каток"))
 
 
 class DatabaseTest(unittest.TestCase):
