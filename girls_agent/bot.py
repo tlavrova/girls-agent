@@ -25,7 +25,7 @@ from typing import Optional
 from urllib.parse import quote_plus
 
 from telegram import Bot, LinkPreviewOptions, Update
-from telegram.constants import ChatAction, MessageEntityType, ParseMode
+from telegram.constants import ChatAction, ChatMemberStatus, MessageEntityType, ParseMode
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
@@ -340,6 +340,8 @@ async def remind(bot: Bot, db: Database, poll, *, quiet_if_done: bool) -> None:
     group = poll_group(db, poll)
     voted = set().union(*(db.voter_ids(p["poll_id"]) for p in group))
     missing = [m for m in members if m["user_id"] not in voted]
+    if missing:
+        missing = await still_in_chat(bot, db, chat_id, missing)
     if not missing:
         if not quiet_if_done:
             await bot.send_message(chat_id, "Все уже проголосовали — вы чудо 💖")
@@ -374,7 +376,8 @@ async def send_reminder(bot: Bot, db: Database, r) -> None:
     if not db.delete_reminder(r["chat_id"], r["id"]):
         return
     if r["user_id"] is None:
-        people = [mention(m["user_id"], m["name"]) for m in db.members(r["chat_id"])]
+        people = [mention(m["user_id"], m["name"])
+                  for m in await still_in_chat(bot, db, r["chat_id"], db.members(r["chat_id"]))]
     else:
         people = [mention(r["user_id"], r["added_by"] or "ты")]
     text = f"⏰ Напоминаю: {html.escape(r['text'])}"
@@ -487,8 +490,32 @@ async def track_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     db = _db(context)
     db.upsert_chat(chat.id, chat.title)
+    left = update.effective_message.left_chat_member if update.effective_message else None
+    if left:  # sent by whoever left, or by the admin who removed her
+        db.remove_member(chat.id, left.id)
+        return
     if user and not user.is_bot:
         db.upsert_member(chat.id, user.id, display_name(user))
+
+
+async def still_in_chat(bot: Bot, db: Database, chat_id: int, members: list) -> list:
+    """The members who haven't left the chat; those who have are forgotten.
+
+    Catches people who left before the bot tracked leaving, or while it was down.
+    """
+    present = []
+    for m in members:
+        try:
+            status = (await bot.get_chat_member(chat_id, m["user_id"])).status
+        except TelegramError as e:
+            log.warning("could not check member %s in %s: %s", m["user_id"], chat_id, e)
+            present.append(m)  # better a stray mention than a missed one
+            continue
+        if status in (ChatMemberStatus.LEFT, ChatMemberStatus.BANNED):
+            db.remove_member(chat_id, m["user_id"])
+        else:
+            present.append(m)
+    return present
 
 
 def addresses_gigi(message, bot) -> bool:

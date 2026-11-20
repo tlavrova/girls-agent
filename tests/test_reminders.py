@@ -58,7 +58,8 @@ class SendReminderTest(unittest.TestCase):
         self.db = Database(":memory:")
         self.db.upsert_member(-100, 1, "Таня")
         self.db.upsert_member(-100, 2, "Аня")
-        self.tg = SimpleNamespace(send_message=AsyncMock())
+        self.tg = SimpleNamespace(send_message=AsyncMock(),
+                                  get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member")))
 
     def test_due_ones_are_sent_once_with_mentions(self):
         now = datetime.now(timezone.utc)
@@ -79,6 +80,18 @@ class SendReminderTest(unittest.TestCase):
         self.assertIn("tg://user?id=1", mine)
         self.assertNotIn("tg://user?id=2", mine)
         self.assertEqual([r["text"] for r in self.db.reminders(-100)], ["позже"])
+
+
+    def test_people_who_left_are_not_mentioned_and_forgotten(self):
+        self.tg.get_chat_member.side_effect = lambda chat_id, user_id: SimpleNamespace(
+            status="left" if user_id == 2 else "member")
+        now = datetime.now(timezone.utc)
+        self.db.add_reminder(-100, now - timedelta(minutes=1), "ужин")
+        asyncio.run(bot.send_reminder(self.tg, self.db, self.db.due_reminders(now)[0]))
+        text = self.tg.send_message.call_args.args[1]
+        self.assertIn("tg://user?id=1", text)
+        self.assertNotIn("tg://user?id=2", text)
+        self.assertEqual([m["user_id"] for m in self.db.members(-100)], [1])
 
 
 class PromptTest(unittest.TestCase):

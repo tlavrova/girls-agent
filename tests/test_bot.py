@@ -85,7 +85,8 @@ class SplitDatePollTest(unittest.TestCase):
         self.cfg = SimpleNamespace(tz=ZoneInfo("Europe/Amsterdam"), meeting_weekdays=(4, 5, 6), date_poll_days=3)
         sent = [SimpleNamespace(poll=SimpleNamespace(id=f"p{i}"), message_id=10 + i) for i in (1, 2)]
         self.tg = SimpleNamespace(send_poll=AsyncMock(side_effect=sent), send_message=AsyncMock(),
-                                  stop_poll=AsyncMock())
+                                  stop_poll=AsyncMock(),
+                                  get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member")))
         with patch.object(bot, "datetime", wraps=datetime) as dt:
             dt.now.side_effect = lambda tz=None: datetime(2026, 11, 20, 11, tzinfo=tz or timezone.utc)
             asyncio.run(bot.start_date_poll(self.tg, self.db, self.cfg, -100))
@@ -125,6 +126,33 @@ class SplitDatePollTest(unittest.TestCase):
         self.assertIn("Маша", text)
         self.assertNotIn("Аня", text)
         self.assertEqual(self.tg.send_message.call_args.kwargs["reply_to_message_id"], 11)
+
+
+class LeftMembersTest(unittest.TestCase):
+    def setUp(self):
+        self.db = Database(":memory:")
+        self.db.upsert_member(-100, 1, "Таня")
+        self.db.upsert_member(-100, 2, "Алёна")
+
+    def test_poll_reminder_skips_and_forgets_who_left(self):
+        # feedback: the date reminder tagged Alena, who had already left the group
+        self.db.add_poll("p", -100, 5, "date", ["сб", "Не могу"], {"dates": ["2026-12-05"]},
+                         datetime.now(timezone.utc) + timedelta(days=1))
+        tg = SimpleNamespace(send_message=AsyncMock(), get_chat_member=AsyncMock(
+            side_effect=lambda chat_id, user_id: SimpleNamespace(status="left" if user_id == 2 else "member")))
+        asyncio.run(bot.remind(tg, self.db, self.db.get_poll("p"), quiet_if_done=True))
+        text = plain(tg.send_message.call_args.args[1])
+        self.assertIn("Таня", text)
+        self.assertNotIn("Алёна", text)
+        self.assertEqual([m["user_id"] for m in self.db.members(-100)], [1])
+
+    def test_leaving_message_forgets_the_member(self):
+        chat = SimpleNamespace(id=-100, type="supergroup", title="Девочки", PRIVATE="private")
+        left = SimpleNamespace(id=2)
+        update = SimpleNamespace(effective_chat=chat, effective_user=SimpleNamespace(id=2, is_bot=False),
+                                 effective_message=SimpleNamespace(left_chat_member=left))
+        asyncio.run(bot.track_chat(update, SimpleNamespace(bot_data={"db": self.db})))
+        self.assertEqual([m["user_id"] for m in self.db.members(-100)], [1])
 
 
 class WeatherLookupTest(unittest.TestCase):
