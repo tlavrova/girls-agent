@@ -1,7 +1,8 @@
 """Gigi (Girls Agent): a Telegram bot that organizes meetups for a group of friends.
 
 MVP flow:
-1. On the 20th of the month the bot posts a poll with next month's weekend dates
+1. On the 20th of the month the bot posts a poll with next month's Fridays and weekends,
+   split over two polls that count as one vote when they don't fit in one
    (unless a meetup for next month is already scheduled).
 2. Every evening it pings members who haven't voted yet.
 3. When the poll closes it fixes the date and offers 2-3 activity options in a second poll.
@@ -77,7 +78,7 @@ HELP = (
     "Привет, я <b>Gigi</b> 💖\n"
     "Помогаю нашей компании собираться, чтобы встречи не терялись в переписке.\n\n"
     "<b>Что я делаю</b>\n"
-    "🗓 {poll_day}-го числа спрашиваю, в какие выходные следующего месяца всем удобно\n"
+    "🗓 {poll_day}-го числа спрашиваю, в какие пятницы и выходные следующего месяца всем удобно\n"
     "🔔 Мягко напоминаю тем, кто ещё не проголосовал\n"
     "✨ Когда дата выбрана, предлагаю 3 варианта: ресторан, вечеринка или событие\n"
     "📒 Записываю план в общую повестку (/agenda)\n"
@@ -158,22 +159,42 @@ async def start_date_poll(bot: Bot, db: Database, cfg: Config, chat_id: int) -> 
         await bot.send_message(chat_id, "Не нашла подходящих дат — проверьте MEETING_WEEKDAYS в настройках.")
         return
     month_word = planner.month_prepositional(dates[0])
-    options = [planner.format_date(d) for d in dates] + [NONE_OPTION]
-    msg = await bot.send_poll(
-        chat_id,
-        question=f"Когда встречаемся в {month_word}? Отметьте все удобные даты 💃",
-        options=options,
-        is_anonymous=False,  # otherwise the bot can't see who voted and can't remind
-        allows_multiple_answers=True,
-    )
+    chunks = planner.split_evenly(dates, planner.MAX_DATE_OPTIONS)
     closes_at = datetime.now(timezone.utc) + timedelta(days=cfg.date_poll_days)
-    db.add_poll(msg.poll.id, chat_id, msg.message_id, "date", options,
-                {"dates": [d.isoformat() for d in dates]}, closes_at)
+    first = None  # the first poll's id ties the parts together: they close and count as one vote
+    for i, chunk in enumerate(chunks, 1):
+        question = f"Когда встречаемся в {month_word}? Отметьте все удобные даты 💃"
+        if len(chunks) > 1:
+            question += f" (часть {i} из {len(chunks)}: {chunk[0].day}–{chunk[-1].day})"
+        options = [planner.format_date(d) for d in chunk] + [NONE_OPTION]
+        msg = await bot.send_poll(
+            chat_id,
+            question=question,
+            options=options,
+            is_anonymous=False,  # otherwise the bot can't see who voted and can't remind
+            allows_multiple_answers=True,
+        )
+        payload = {"dates": [d.isoformat() for d in chunk]}
+        if first is None:
+            first = msg
+        else:
+            payload["group"] = first.poll.id
+        db.add_poll(msg.poll.id, chat_id, msg.message_id, "date", options, payload, closes_at)
+    note = " Голоса из обоих опросов считаю вместе." if len(chunks) > 1 else ""
     await bot.send_message(
         chat_id,
-        f"Голосуем до {closes_at.astimezone(cfg.tz):%d.%m %H:%M}. Тем, кто не успеет, напомню 🔔",
-        reply_to_message_id=msg.message_id,
+        f"Голосуем до {closes_at.astimezone(cfg.tz):%d.%m %H:%M}.{note} Тем, кто не успеет, напомню 🔔",
+        reply_to_message_id=first.message_id,
     )
+
+
+def poll_group(db: Database, poll) -> list:
+    """A date poll and the other parts posted with it, first part first; any other poll alone."""
+    if poll["kind"] != "date":
+        return [poll]
+    key = json.loads(poll["payload"]).get("group") or poll["poll_id"]
+    return [p for p in db.polls_of_kind(poll["chat_id"], "date")
+            if p["poll_id"] == key or json.loads(p["payload"]).get("group") == key]
 
 
 def idea_details(idea: dict) -> str:
@@ -235,12 +256,18 @@ async def propose_activities(bot: Bot, db: Database, cfg: Config, chat_id: int,
 
 
 async def finish_poll(bot: Bot, db: Database, cfg: Config, poll) -> None:
+    group = poll_group(db, poll)
+    # all parts are closed before the first await, so a concurrent close of another part sees them closed
     if not db.close_poll(poll["poll_id"]):
         return  # already closed concurrently (command + scheduled job)
-    try:
-        await bot.stop_poll(poll["chat_id"], poll["message_id"])
-    except TelegramError as e:
-        log.warning("stop_poll failed: %s", e)
+    for p in group:
+        if p["poll_id"] != poll["poll_id"]:
+            db.close_poll(p["poll_id"])
+    for p in group:
+        try:
+            await bot.stop_poll(p["chat_id"], p["message_id"])
+        except TelegramError as e:
+            log.warning("stop_poll failed: %s", e)
 
     chat_id = poll["chat_id"]
     options = json.loads(poll["options"])
@@ -258,8 +285,12 @@ async def finish_poll(bot: Bot, db: Database, cfg: Config, poll) -> None:
         await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_to_message_id=poll["message_id"])
 
     elif poll["kind"] == "date":
-        dates = payload["dates"]
-        winner = planner.pick_winner(counts[: len(dates)])
+        dates, counts = [], []
+        for p in group:  # the parts' dates and counts joined in order, as if it were one poll
+            part_dates = json.loads(p["payload"])["dates"]
+            dates += part_dates
+            counts += planner.tally(db.votes(p["poll_id"]), len(json.loads(p["options"])))[: len(part_dates)]
+        winner = planner.pick_winner(counts)
         if winner is None:
             await bot.send_message(
                 chat_id,
@@ -306,7 +337,8 @@ async def remind(bot: Bot, db: Database, poll, *, quiet_if_done: bool) -> None:
         if not quiet_if_done:
             await bot.send_message(chat_id, "Я пока никого не знаю 🙈 Напишите что-нибудь в чат, чтобы я могла напоминать.")
         return
-    voted = db.voter_ids(poll["poll_id"])
+    group = poll_group(db, poll)
+    voted = set().union(*(db.voter_ids(p["poll_id"]) for p in group))
     missing = [m for m in members if m["user_id"] not in voted]
     if not missing:
         if not quiet_if_done:
@@ -317,7 +349,7 @@ async def remind(bot: Bot, db: Database, poll, *, quiet_if_done: bool) -> None:
         chat_id,
         f"Девочки, ждём ваш голос {what} 🙏 " + ", ".join(mention(m["user_id"], m["name"]) for m in missing),
         parse_mode=ParseMode.HTML,
-        reply_to_message_id=poll["message_id"],
+        reply_to_message_id=group[0]["message_id"],
     )
 
 
@@ -363,6 +395,8 @@ async def due_reminders_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
     for poll in db.open_polls():
+        if json.loads(poll["payload"]).get("group"):
+            continue  # a later part of a date poll: the reminder for the first part covers it
         try:
             await remind(context.bot, db, poll, quiet_if_done=True)
         except TelegramError as e:

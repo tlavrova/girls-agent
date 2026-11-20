@@ -4,7 +4,8 @@ import re
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 from girls_agent import bot, weather
 from girls_agent.db import Database
@@ -74,6 +75,56 @@ class RequestedPollTest(unittest.TestCase):
         self.assertEqual(bot._parse_date("2026-10-31", date(2026, 1, 1)), date(2026, 10, 31))
         self.assertEqual(bot._parse_date("завтра", date(2026, 1, 1)), date(2026, 1, 1))
         self.assertEqual(bot._parse_date(None, date(2026, 1, 1)), date(2026, 1, 1))
+
+
+class SplitDatePollTest(unittest.TestCase):
+    """Fridays and weekends don't fit in one poll: two polls are posted and count as one vote."""
+
+    def setUp(self):
+        self.db = Database(":memory:")
+        self.cfg = SimpleNamespace(tz=ZoneInfo("Europe/Amsterdam"), meeting_weekdays=(4, 5, 6), date_poll_days=3)
+        sent = [SimpleNamespace(poll=SimpleNamespace(id=f"p{i}"), message_id=10 + i) for i in (1, 2)]
+        self.tg = SimpleNamespace(send_poll=AsyncMock(side_effect=sent), send_message=AsyncMock(),
+                                  stop_poll=AsyncMock())
+        with patch.object(bot, "datetime", wraps=datetime) as dt:
+            dt.now.side_effect = lambda tz=None: datetime(2026, 11, 20, 11, tzinfo=tz or timezone.utc)
+            asyncio.run(bot.start_date_poll(self.tg, self.db, self.cfg, -100))
+
+    def test_december_is_split_in_two_polls(self):
+        calls = self.tg.send_poll.call_args_list
+        self.assertEqual(len(calls), 2)
+        first, second = (c.kwargs["options"] for c in calls)
+        self.assertEqual((len(first), len(second)), (7, 7))  # 12 Fri/Sat/Sun in December 2026 + "none" each
+        self.assertEqual(first[0], "пт, 4 декабря")
+        self.assertIn("часть 2 из 2", calls[1].kwargs["question"])
+
+    def test_votes_from_both_parts_count_together(self):
+        self.db.record_vote("p1", 1, [0])
+        self.db.record_vote("p2", 1, [2])
+        self.db.record_vote("p2", 2, [2])
+        with patch.object(bot, "propose_activities", AsyncMock()):
+            asyncio.run(bot.finish_poll(self.tg, self.db, self.cfg, self.db.get_poll("p1")))
+        self.assertEqual(self.tg.stop_poll.call_count, 2)
+        self.assertEqual(self.db.open_polls(-100), [])
+        part2 = self.db.get_poll("p2")
+        winner = bot.json.loads(part2["payload"])["dates"][2]
+        self.assertTrue(self.db.has_meeting_in_month(-100, 2026, 12))
+        self.assertIn("голосов: 2", self.tg.send_message.call_args.args[1])
+        self.assertIn(bot.human_date(winner), plain(self.tg.send_message.call_args.args[1]))
+
+    def test_one_reminder_counts_votes_in_either_part(self):
+        self.db.upsert_member(-100, 1, "Аня")
+        self.db.upsert_member(-100, 2, "Маша")
+        self.db.record_vote("p2", 1, [0])
+        self.tg.send_message.reset_mock()
+        context = SimpleNamespace(bot=self.tg, bot_data={"db": self.db})
+        with patch.object(bot, "_db", return_value=self.db):
+            asyncio.run(bot.reminder_job(context))
+        self.assertEqual(self.tg.send_message.call_count, 1)
+        text = self.tg.send_message.call_args.args[1]
+        self.assertIn("Маша", text)
+        self.assertNotIn("Аня", text)
+        self.assertEqual(self.tg.send_message.call_args.kwargs["reply_to_message_id"], 11)
 
 
 class WeatherLookupTest(unittest.TestCase):

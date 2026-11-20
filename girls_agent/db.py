@@ -184,6 +184,10 @@ class Database:
         return list(self.conn.execute(
             "SELECT * FROM polls WHERE status = 'open' AND chat_id = ? ORDER BY created_at DESC", (chat_id,)))
 
+    def polls_of_kind(self, chat_id: int, kind: str) -> List[sqlite3.Row]:
+        return list(self.conn.execute(
+            "SELECT * FROM polls WHERE chat_id = ? AND kind = ? ORDER BY created_at, rowid", (chat_id, kind)))
+
     def due_polls(self, now: datetime) -> List[sqlite3.Row]:
         return [p for p in self.open_polls() if datetime.fromisoformat(p["closes_at"]) <= now]
 

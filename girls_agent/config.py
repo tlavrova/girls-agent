@@ -70,7 +70,7 @@ def load_config() -> Config:
         token=token,
         tz=ZoneInfo(os.environ.get("TIMEZONE", "Europe/Amsterdam")),
         db_path=os.environ.get("DB_PATH", "girls_agent.sqlite3"),
-        meeting_weekdays=_int_list(os.environ.get("MEETING_WEEKDAYS", "5,6")),
+        meeting_weekdays=_int_list(os.environ.get("MEETING_WEEKDAYS", "4,5,6")),
         poll_day=poll_day,
         poll_time=_hhmm(os.environ.get("POLL_TIME", "11:00")),
         reminder_time=_hhmm(os.environ.get("REMINDER_TIME", "18:00")),

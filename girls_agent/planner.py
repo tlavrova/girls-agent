@@ -42,6 +42,7 @@ RECOMMENDATION_EMOJI = {
 }
 
 # Telegram allows up to 10 poll options; one is reserved for "none of these work".
+# More dates than that go into several polls that are tallied as one vote.
 MAX_DATE_OPTIONS = 9
 POLL_OPTION_MAX_LEN = 100
 
@@ -64,13 +65,27 @@ def daily_pick(items: Sequence, day: date, seed: int = 0):
     return items[order[pos]]
 
 
-def candidate_dates(today: date, weekdays: Iterable[int], limit: int = MAX_DATE_OPTIONS) -> List[date]:
+def candidate_dates(today: date, weekdays: Iterable[int], limit: Optional[int] = None) -> List[date]:
     """All days of next month that fall on the given weekdays (0 = Monday)."""
     wanted = set(weekdays)
     year, month = next_month(today)
     days_in_month = calendar.monthrange(year, month)[1]
     dates = [date(year, month, d) for d in range(1, days_in_month + 1)]
     return [d for d in dates if d.weekday() in wanted][:limit]
+
+
+def split_evenly(items: Sequence, size: int) -> List[list]:
+    """Consecutive chunks of at most `size` items, as equal as possible: 15 by 9 gives 8 + 7."""
+    if not items:
+        return []
+    parts = -(-len(items) // size)
+    base, extra = divmod(len(items), parts)
+    chunks, start = [], 0
+    for i in range(parts):
+        end = start + base + (1 if i < extra else 0)
+        chunks.append(list(items[start:end]))
+        start = end
+    return chunks
 
 
 def format_date(d: date) -> str:

@@ -14,6 +14,12 @@ class PlannerTest(unittest.TestCase):
         self.assertTrue(all(d.weekday() >= 5 for d in dates))
         self.assertTrue(all(d.month == 11 for d in dates))
 
+    def test_split_evenly(self):
+        self.assertEqual([len(c) for c in planner.split_evenly(list(range(15)), 9)], [8, 7])
+        self.assertEqual([len(c) for c in planner.split_evenly(list(range(9)), 9)], [9])
+        self.assertEqual(sum(planner.split_evenly(list(range(13)), 9), []), list(range(13)))
+        self.assertEqual(planner.split_evenly([], 9), [])
+
     def test_candidate_dates_year_rollover_and_limit(self):
         dates = planner.candidate_dates(date(2026, 12, 3), weekdays=range(7), limit=9)
         self.assertEqual(len(dates), 9)
