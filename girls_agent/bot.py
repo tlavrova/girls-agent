@@ -231,8 +231,6 @@ async def propose_activities(bot: Bot, db: Database, cfg: Config, chat_id: int,
         line = f"{planner.KIND_EMOJI.get(idea['kind'], '✨')} <b>{html.escape(idea['title'])}</b>"
         if idea.get("details"):
             line += f" — {html.escape(idea['details'])}"
-        if idea.get("added_by"):
-            line += f" <i>(идея от {html.escape(idea['added_by'])})</i>"
         links = []
         if idea.get("address"):
             links.append(f'📍 <a href="{html.escape(maps_url(idea["address"]))}">{html.escape(idea["address"])}</a>')
@@ -990,8 +988,6 @@ def recommendations_text(db: Database, chat_id: int, category: Optional[str] = N
         line = f"#{r['id']} {html.escape(r['title'])}"
         if r["details"]:
             line += f" — {html.escape(r['details'])}"
-        if r["recommended_by"]:
-            line += f" <i>({html.escape(r['recommended_by'])})</i>"
         lines.append(line)
     return "\n".join(lines).strip()
 

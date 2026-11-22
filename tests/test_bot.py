@@ -329,7 +329,7 @@ class IdeasAndRecommendationsTest(unittest.TestCase):
         self.reply(bot.save_requested_recommendation, {"category": "бельё", "title": "Hunkemöller"})
         text = bot.recommendations_text(self.db, -100, "косметика")
         self.assertIn("Cetaphil", text)
-        self.assertIn("(Аня)", text)
+        self.assertNotIn("Аня", text)
         self.assertNotIn("Hunkemöller", text)
         self.assertIn("Hunkemöller", bot.recommendations_text(self.db, -100))
         self.assertIn("пока нет", bot.recommendations_text(self.db, -999))
