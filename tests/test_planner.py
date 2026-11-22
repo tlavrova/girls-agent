@@ -90,3 +90,17 @@ class DatabaseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WithoutAuthorTest(unittest.TestCase):
+    def test_author_phrases_removed(self):
+        cases = {
+            "Совет от Татьяны Лавровой": "",
+            "Репетиторы детям, помощь в школе (bijles). Посоветовала Даша.": "Репетиторы детям, помощь в школе (bijles).",
+            "отлично от сухости": "отлично от сухости",
+            "триллер, советую всем": "триллер, советую всем",
+            "паста (рекомендует Аня), Oudegracht 1": "паста, Oudegracht 1",
+            "Идея от Маши. Бар на крыше": "Бар на крыше",
+        }
+        for text, expected in cases.items():
+            self.assertEqual(planner.without_author(text), expected, text)

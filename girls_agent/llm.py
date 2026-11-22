@@ -270,7 +270,8 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "category": {"type": "string", "enum": list(RECOMMENDATION_CATEGORIES)},
             "title": {"type": "string", "description": "Что именно, коротко: бренд, товар, магазин, мастер"},
-            "details": {"type": "string", "description": "Подробности: чем хорошо, где купить, цена, ссылка"},
+            "details": {"type": "string", "description": ("Подробности: чем хорошо, где купить, цена, ссылка. "
+                                                          "Без имени того, кто советует, и без «совет от …»")},
             "recommended_by": {"type": "string", "description": "Кто советует; если сам автор — его имя"},
         }, "required": ["category", "title"]},
     }},

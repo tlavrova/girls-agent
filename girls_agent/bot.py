@@ -952,7 +952,7 @@ async def save_requested_idea(message, db: Database, args: dict) -> None:
     if not title:
         await message.reply_text("Не поняла, что сохранить 🤔 Напиши название места.")
         return
-    details = planner.truncate(str(args.get("details") or "").strip(), 500)  # address, date, price and a link
+    details = planner.without_author(planner.truncate(str(args.get("details") or "").strip(), 500))  # address, date, price and a link
     idea_id = db.add_idea(message.chat_id, kind, title, details, display_name(message.from_user))
     await message.reply_text(f"{planner.KIND_EMOJI[kind]} Сохранила в банк идей: {title}. "
                              f"Предложу, когда будем выбирать досуг.\nНе то? /unidea {idea_id}")
@@ -965,7 +965,7 @@ async def save_requested_recommendation(message, db: Database, args: dict) -> No
     if not title:
         await message.reply_text("Не поняла, что записать 🤔 Напиши, что именно советуешь.")
         return
-    details = planner.truncate(str(args.get("details") or "").strip(), 300)
+    details = planner.without_author(planner.truncate(str(args.get("details") or "").strip(), 300))
     by = planner.truncate(str(args.get("recommended_by") or "").strip(), 50) or display_name(message.from_user)
     rec_id = db.add_recommendation(message.chat_id, category, title, details, by)
     await message.reply_text(f"{planner.RECOMMENDATION_EMOJI[category]} Записала в советы ({category}): {title}. "
@@ -986,8 +986,8 @@ def recommendations_text(db: Database, chat_id: int, category: Optional[str] = N
             current = r["category"]
             lines.append(f"\n{planner.RECOMMENDATION_EMOJI.get(current, '💡')} <b>{html.escape(current.capitalize())}</b>")
         line = f"#{r['id']} {html.escape(r['title'])}"
-        if r["details"]:
-            line += f" — {html.escape(r['details'])}"
+        if planner.without_author(r["details"]):
+            line += f" — {html.escape(planner.without_author(r['details']))}"
         lines.append(line)
     return "\n".join(lines).strip()
 
@@ -1118,8 +1118,8 @@ async def ideas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lines = ["<b>Банк идей</b>"]
     for i in ideas[:30]:
         line = f"{planner.KIND_EMOJI.get(i['kind'], '✨')} #{i['id']} {html.escape(i['title'])}"
-        if i["details"]:
-            line += f" — {html.escape(i['details'])}"
+        if planner.without_author(i["details"]):
+            line += f" — {html.escape(planner.without_author(i['details']))}"
         lines.append(line)
     lines.append("<i>Удалить: /unidea номер</i>")
     await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)

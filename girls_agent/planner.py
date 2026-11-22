@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import calendar
 import random
+import re
 from datetime import date
 from typing import Iterable, List, Optional, Sequence
 
@@ -153,3 +154,15 @@ def idea_option(idea: dict) -> str:
 def truncate(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
+
+
+# "Совет от Тани", "Посоветовала Даша.", "(рекомендует Аня)": who recommended it; the lists don't show authors
+_AUTHOR = re.compile(
+    r"[\s(—–,;-]*\b(?:совет|идея|рекомендация)\s+от\s+[^.;()\n]*[.;)]?"
+    r"|[\s(—–,;-]*\b(?:по)?(?:совет|рекоменд)(?:овала?|овали|ует|уют)\s+[^.;()\n]*[.;)]?",
+    re.IGNORECASE)
+
+
+def without_author(details: str) -> str:
+    """Details without a phrase saying who recommended or suggested it."""
+    return _AUTHOR.sub("", details or "").strip(" —–,;-")
