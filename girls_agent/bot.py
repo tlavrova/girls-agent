@@ -393,11 +393,20 @@ async def due_reminders_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             log.warning("reminder %s failed in %s: %s", r["id"], r["chat_id"], e)
 
 
+def reminder_due(poll, today: date, tz) -> bool:
+    """One reminder per poll, the day after it opened: the 21st for the date poll that opens on the 20th."""
+    opened = datetime.fromisoformat(poll["created_at"]).astimezone(tz).date()
+    return opened + timedelta(days=1) == today
+
+
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    db = _db(context)
+    db, cfg = _db(context), _cfg(context)
+    today = datetime.now(cfg.tz).date()
     for poll in db.open_polls():
         if json.loads(poll["payload"]).get("group"):
             continue  # a later part of a date poll: the reminder for the first part covers it
+        if not reminder_due(poll, today, cfg.tz):
+            continue
         try:
             await remind(context.bot, db, poll, quiet_if_done=True)
         except TelegramError as e:

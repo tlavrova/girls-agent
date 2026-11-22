@@ -117,15 +117,30 @@ class SplitDatePollTest(unittest.TestCase):
         self.db.upsert_member(-100, 1, "Аня")
         self.db.upsert_member(-100, 2, "Маша")
         self.db.record_vote("p2", 1, [0])
-        self.tg.send_message.reset_mock()
-        context = SimpleNamespace(bot=self.tg, bot_data={"db": self.db})
-        with patch.object(bot, "_db", return_value=self.db):
-            asyncio.run(bot.reminder_job(context))
+        self.open_days_ago(1)
+        self.run_reminders()
         self.assertEqual(self.tg.send_message.call_count, 1)
         text = self.tg.send_message.call_args.args[1]
         self.assertIn("Маша", text)
         self.assertNotIn("Аня", text)
         self.assertEqual(self.tg.send_message.call_args.kwargs["reply_to_message_id"], 11)
+
+    def test_reminds_only_the_day_after_the_poll_opened(self):
+        self.db.upsert_member(-100, 2, "Маша")
+        for days_ago in (0, 2):
+            self.open_days_ago(days_ago)
+            self.run_reminders()
+            self.assertEqual(self.tg.send_message.call_count, 0, days_ago)
+
+    def open_days_ago(self, days: int) -> None:
+        opened = datetime.now(self.cfg.tz) - timedelta(days=days)
+        self.db.conn.execute("UPDATE polls SET created_at = ?", (opened.isoformat(),))
+
+    def run_reminders(self) -> None:
+        self.tg.send_message.reset_mock()
+        context = SimpleNamespace(bot=self.tg, bot_data={"db": self.db})
+        with patch.object(bot, "_db", return_value=self.db), patch.object(bot, "_cfg", return_value=self.cfg):
+            asyncio.run(bot.reminder_job(context))
 
 
 class LeftMembersTest(unittest.TestCase):

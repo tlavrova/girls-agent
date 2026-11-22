@@ -11,7 +11,7 @@ The bot talks to the group in Russian; the code and docs are in English.
 | Step | What happens |
 |---|---|
 | 1. Date poll | On the **20th of each month** at 11:00 the bot posts a multi-choice poll with every Friday, Saturday and Sunday of next month. A poll fits 9 dates, so the month is split into two polls that close together and are counted as one vote. If a meetup for next month already exists, it skips. |
-| 2. Reminders | Every day at 18:00 it mentions members who haven't voted yet. |
+| 2. Reminders | Once per poll, at 18:00 on the day after it opened (the 21st for the date poll), it mentions members who haven't voted yet. |
 | 3. Date picked | After 3 days (or on `/close`) the date with the most votes wins; ties go to the earlier date. |
 | 4. Activity | It offers 3 options of different kinds (restaurant / party / event): real restaurants, events and films in cinemas for that date in `MEETUP_CITY` found by web search, each with an address and a link to the source. An event needs its own name ("Glitterbal — Melkweg", not just a club), and a place whose link isn't in the search results is dropped. It takes into account the weather, the group's "не предлагай нам …" list ("снова можно караоке" takes an item back) and recent meetups. Saved ideas and the starter set fill in only when search finds too few: the group can look at `/ideas` itself. A second poll runs for 48 hours. |
 | 5. Agenda | The final plan is saved and listed by `/agenda`. |
