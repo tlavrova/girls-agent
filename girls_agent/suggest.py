@@ -35,7 +35,9 @@ PROMPT = (
     '"address": "адрес из результатов или пустая строка", "url": "ссылка из результатов"}}. '
     "У вечеринки и мероприятия title строго в виде «Название события — Площадка» («Glitterbal — Melkweg»), а details — что это: "
     "жанр, артисты или программа, время, если есть. Просто «вечеринка в клубе» не годится: если из результатов "
-    "непонятно, что за событие, не бери его. У ресторана details — кухня и чем хорош. "
+    "непонятно, что за событие, не бери его. Фильм в кинотеатре — мероприятие «Фильм — Кинотеатр», "
+    "только если по результатам он идёт в прокате {day} и стоит того (громкая новинка, хорошие отзывы); "
+    "в details — жанр и чем интересен. У ресторана details — кухня и чем хорош. "
     "url — самая конкретная ссылка из результатов: страница этого события или места, а не общая афиша, если такая есть. "
     "Не нашлось подходящего — пустой массив [].\n\n"
     "Результаты поиска:\n{results}"
@@ -43,10 +45,11 @@ PROMPT = (
 
 
 def queries(city: str, day: date) -> List[str]:
-    """A restaurant search and an events search for that date; Dutch sites list the most."""
+    """Restaurant, events and cinema searches for that date; Dutch sites list the most."""
     when = f"{day.day} {MONTHS_NL[day.month - 1]} {day.year}"
     return [f"leuke restaurants {city} etentje met vriendinnen",
-            f"uitgaan {city} {when} evenementen concerten feesten"]
+            f"uitgaan {city} {when} evenementen concerten feesten",
+            f"bioscoop {city} films in première {MONTHS_NL[day.month - 1]} {day.year}"]
 
 
 def named_event(title: str, results: str) -> bool:

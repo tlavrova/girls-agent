@@ -28,7 +28,7 @@ KIND_EMOJI = {
     "идея": "✨",
 }
 
-# Categories of recommendations (things and services, not places to go together), with their emoji
+# Categories of recommendations (things, services, films and books; not places to go together), with their emoji
 RECOMMENDATION_EMOJI = {
     "косметика": "💄",
     "одежда": "👗",
@@ -38,6 +38,8 @@ RECOMMENDATION_EMOJI = {
     "красота и здоровье": "💅",
     "дети": "🧸",
     "дом": "🏠",
+    "фильмы и сериалы": "🎬",
+    "книги": "📚",
     "другое": "💡",
 }
 

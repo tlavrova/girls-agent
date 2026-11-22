@@ -50,6 +50,9 @@ class ParseTest(unittest.TestCase):
     def test_queries_mention_the_date(self):
         self.assertIn("14 november 2026", suggest.queries("Amsterdam", date(2026, 11, 14))[1])
 
+    def test_cinema_is_searched_too(self):
+        self.assertIn("bioscoop Amsterdam", suggest.queries("Amsterdam", date(2026, 11, 14))[2])
+
 
 class RealPlacesTest(unittest.TestCase):
     def run_places(self, found, reply, n=3, cfg=CFG):
@@ -64,7 +67,7 @@ class RealPlacesTest(unittest.TestCase):
         places, lookup, complete = self.run_places(RESULTS, answer({"kind": "ресторан", "title": "Trattoria X",
                                                                     "url": "https://x.nl"}))
         self.assertEqual([p["title"] for p in places], ["Trattoria X"])
-        self.assertEqual(lookup.call_count, 2)
+        self.assertEqual(lookup.call_count, 3)
         prompt = complete.call_args.args[3][-1]["content"]
         for part in ("сб, 14 ноября", "🌧 дождь", "суши", "Караоке", "до 5"):
             self.assertIn(part, prompt)

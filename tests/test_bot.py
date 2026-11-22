@@ -318,6 +318,12 @@ class IdeasAndRecommendationsTest(unittest.TestCase):
         self.assertEqual(self.db.unused_ideas(-100)[0]["kind"], "идея")
         self.assertEqual(self.db.recommendations(-100)[0]["category"], "другое")
 
+    def test_film_is_a_recommendation(self):
+        reply = self.reply(bot.save_requested_recommendation, {"category": "фильмы и сериалы", "title": "The Invite"})
+        self.assertIn("🎬", reply)
+        self.assertNotIn("досуг", reply)
+        self.assertEqual(self.db.recommendations(-100)[0]["category"], "фильмы и сериалы")
+
     def test_recommendations_listed_by_category(self):
         self.reply(bot.save_requested_recommendation, {"category": "косметика", "title": "Cetaphil", "recommended_by": "Аня"})
         self.reply(bot.save_requested_recommendation, {"category": "бельё", "title": "Hunkemöller"})
