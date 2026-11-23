@@ -229,19 +229,22 @@ class PlansTest(unittest.TestCase):
 
     def test_saves_and_confirms(self):
         reply = self.save({"date": "2026-10-31", "time": "19:00", "what": "ужин", "place": "кафе X", "who": "Таня, Аня"})
-        self.assertIn("сб, 31 октября, 19:00 — ужин, кафе X (Таня, Аня)", reply)
+        self.assertIn("сб, 31 октября, 19:00 — ужин, кафе X", reply)
+        self.assertNotIn("Аня", reply)
         plan = self.db.upcoming_plans(-100, "2026-10-28")[0]
         self.assertEqual((plan["what"], plan["added_by"]), ("ужин", "Таня"))
 
     def test_place_links_to_maps(self):
         reply = self.save({"date": "2026-10-31", "what": "ужин", "place": "Café <De Pijp>", "who": "Таня"}, raw=True)
         self.assertIn('ужин, <a href="https://www.google.com/maps/search/?api=1&amp;query=Caf%C3%A9+%3CDe+Pijp%3E">'
-                      'Café &lt;De Pijp&gt;</a> (Таня)', reply)
+                      'Café &lt;De Pijp&gt;</a>', reply)
         plan = self.db.upcoming_plans(-100, "2026-10-28")[0]
-        self.assertEqual(bot.plan_line(plan), "сб, 31 октября — ужин, Café <De Pijp> (Таня)")
+        self.assertEqual(bot.plan_line(plan), "сб, 31 октября — ужин, Café <De Pijp>")
+        self.assertEqual(bot.plan_line(plan, who=True), "сб, 31 октября — ужин, Café <De Pijp> (Таня)")
 
     def test_self_becomes_author_name(self):
-        self.assertIn("ужин, Moeders (Таня)", self.save({"date": "2026-10-31", "what": "ужин", "place": "Moeders", "who": "я"}))
+        self.save({"date": "2026-10-31", "what": "ужин", "place": "Moeders", "who": "я"})
+        self.assertEqual(self.db.upcoming_plans(-100, "2026-10-28")[0]["who"], "Таня")
         self.assertEqual(bot.name_people("я, Аня", "Таня"), "Таня, Аня")
         self.assertEqual(bot.name_people("мы с Аней", "Таня"), "Таня, Аней")
         self.assertEqual(bot.name_people("Я и Таня", "Таня"), "Таня")

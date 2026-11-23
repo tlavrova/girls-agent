@@ -115,10 +115,11 @@ def maps_url(place: str) -> str:
     return "https://www.google.com/maps/search/?api=1&query=" + quote_plus(place)
 
 
-def plan_line(p, links: bool = False) -> str:
-    """One saved plan: "сб, 31 октября, 19:00 — ужин, кафе X (Таня, Аня)".
+def plan_line(p, links: bool = False, who: bool = False) -> str:
+    """One saved plan: "сб, 31 октября, 19:00 — ужин, кафе X".
 
     links=True gives HTML with the place linked to Google Maps; otherwise plain text.
+    who=True adds who's going, "(Таня, Аня)": only for the LLM, the group's lists don't show names.
     """
     esc = html.escape if links else str
     when = human_date(p["date"]) + (f", {p['time']}" if p["time"] else "")
@@ -126,7 +127,7 @@ def plan_line(p, links: bool = False) -> str:
     if p["place"]:
         place = f'<a href="{html.escape(maps_url(p["place"]))}">{html.escape(p["place"])}</a>' if links else p["place"]
         line += f", {place}"
-    return line + (esc(f" ({p['who']})") if p["who"] else "")
+    return line + (esc(f" ({p['who']})") if who and p["who"] else "")
 
 
 def reminder_line(r, tz) -> str:
@@ -146,7 +147,7 @@ def plans_for_llm(db: Database, chat_id: int, today: date) -> str:
     for m in db.upcoming_meetings(chat_id, today.isoformat()):
         lines.append((m["date"], f"[общая встреча, без номера] {human_date(m['date'])} — {m['activity'] or 'досуг ещё выбираем'}"))
     for p in db.upcoming_plans(chat_id, today.isoformat()):
-        lines.append((p["date"], f"[#{p['id']}] {plan_line(p)}"))
+        lines.append((p["date"], f"[#{p['id']}] {plan_line(p, who=True)}"))
     return "\n".join(text for _, text in sorted(lines, key=lambda x: x[0]))
 
 
