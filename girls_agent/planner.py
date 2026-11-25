@@ -47,7 +47,6 @@ RECOMMENDATION_EMOJI = {
 # Telegram allows up to 10 poll options; one is reserved for "none of these work".
 # More dates than that go into several polls that are tallied as one vote.
 MAX_DATE_OPTIONS = 9
-POLL_OPTION_MAX_LEN = 100
 
 
 def next_month(today: date) -> tuple:
@@ -144,11 +143,6 @@ def pick_ideas(own: Sequence[dict], seeds: Sequence[dict], n: int = 3,
     for pool in (own, seeds):
         take(pool, diverse=False)
     return picked
-
-
-def idea_option(idea: dict) -> str:
-    emoji = KIND_EMOJI.get(idea.get("kind", ""), "✨")
-    return truncate(f"{emoji} {idea['title']}", POLL_OPTION_MAX_LEN)
 
 
 def truncate(text: str, limit: int) -> str:

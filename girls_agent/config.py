@@ -55,7 +55,6 @@ class Config:
     allowed_chats: tuple             # group chat ids the bot works in; empty = any chat
     group_file: str                  # text file describing the group and its members, for the LLM
     date_poll_days: int
-    activity_poll_hours: int
 
 
 def load_config() -> Config:
@@ -91,5 +90,4 @@ def load_config() -> Config:
         allowed_chats=_int_list(os.environ.get("ALLOWED_CHATS", "")),
         group_file=os.environ.get("GROUP_FILE", "group.txt"),
         date_poll_days=int(os.environ.get("DATE_POLL_DAYS", "3")),
-        activity_poll_hours=int(os.environ.get("ACTIVITY_POLL_HOURS", "48")),
     )

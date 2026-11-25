@@ -103,7 +103,7 @@ class SplitDatePollTest(unittest.TestCase):
         self.db.record_vote("p1", 1, [0])
         self.db.record_vote("p2", 1, [2])
         self.db.record_vote("p2", 2, [2])
-        with patch.object(bot, "propose_activities", AsyncMock()):
+        with patch.object(bot, "share_ideas", AsyncMock()):
             asyncio.run(bot.finish_poll(self.tg, self.db, self.cfg, self.db.get_poll("p1")))
         self.assertEqual(self.tg.stop_poll.call_count, 2)
         self.assertEqual(self.db.open_polls(-100), [])
@@ -131,6 +131,14 @@ class SplitDatePollTest(unittest.TestCase):
             self.open_days_ago(days_ago)
             self.run_reminders()
             self.assertEqual(self.tg.send_message.call_count, 0, days_ago)
+
+    def test_no_reminder_for_other_polls(self):
+        # feedback: tagging people over a place poll felt like spam; only the date poll gets a reminder
+        self.db.upsert_member(-100, 2, "Маша")
+        self.db.conn.execute("UPDATE polls SET kind = 'activity'")
+        self.open_days_ago(1)
+        self.run_reminders()
+        self.assertEqual(self.tg.send_message.call_count, 0)
 
     def open_days_ago(self, days: int) -> None:
         opened = datetime.now(self.cfg.tz) - timedelta(days=days)
@@ -266,7 +274,17 @@ class PlansTest(unittest.TestCase):
         self.db.set_meeting_plan(meeting, "боулинг", "")
         self.db.add_plan(-100, "2026-10-20", "прошлое")
         lines = bot.plans_for_llm(self.db, -100, self.today).splitlines()
-        self.assertEqual(lines, ["[общая встреча, без номера] вс, 1 ноября — боулинг", "[#1] сб, 7 ноября — йога"])
+        self.assertEqual(lines, ["[общая встреча, без номера] вс, 1 ноября — место ещё не выбрали",
+                                 "[#1] сб, 7 ноября — йога"])
+
+    def test_a_plan_on_the_meetup_date_replaces_the_meetup(self):
+        # feedback: the agenda showed a place Gigi picked at random next to the place the group booked
+        meeting = self.db.add_meeting(-100, "2026-12-06")
+        self.db.set_meeting_plan(meeting, "FC Hyena", "кинотеатр")
+        self.db.add_plan(-100, "2026-12-06", "ужин", time="18:30", place="Sojubar")
+        text = bot.plans_for_llm(self.db, -100, self.today)
+        self.assertNotIn("FC Hyena", text)
+        self.assertNotIn("общая встреча", text)
 
 
 class PlanEditsTest(unittest.TestCase):

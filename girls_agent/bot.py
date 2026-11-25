@@ -4,9 +4,9 @@ MVP flow:
 1. On the 20th of the month the bot posts a poll with next month's Fridays and weekends,
    split over two polls that count as one vote when they don't fit in one
    (unless a meetup for next month is already scheduled).
-2. Every evening it pings members who haven't voted yet.
-3. When the poll closes it fixes the date and offers 2-3 activity options in a second poll.
-4. The winning option is saved to the shared agenda (/agenda).
+2. The day after the date poll opens it pings members who haven't voted yet, once.
+3. When the poll closes it fixes the date and shares a few ideas for that day (no poll:
+   the group picks the place itself).
 
 Messages to users are in Russian: the bot serves a Russian-speaking group.
 """
@@ -18,7 +18,6 @@ import functools
 import html
 import json
 import logging
-import random
 import re
 from datetime import date, datetime, time as dtime, timedelta, timezone
 from typing import Optional
@@ -141,11 +140,21 @@ def reminders_for_llm(db: Database, chat_id: int, tz) -> str:
     return "\n".join(f"[#{r['id']}] {reminder_line(r, tz)}" for r in db.reminders(chat_id))
 
 
+def open_meetups(db: Database, chat_id: int, today: str) -> list:
+    """Meetup dates from the date poll that no saved plan covers yet.
+
+    Only the date counts: the group picks the place itself and tells Gigi as a plan,
+    so a place an old place poll put on the meetup isn't shown.
+    """
+    planned = {p["date"] for p in db.upcoming_plans(chat_id, today)}
+    return [m for m in db.upcoming_meetings(chat_id, today) if m["date"] not in planned]
+
+
 def plans_for_llm(db: Database, chat_id: int, today: date) -> str:
     """Upcoming meetups and saved plans, one per line, so Gigi answers questions about plans with facts."""
     lines = []
-    for m in db.upcoming_meetings(chat_id, today.isoformat()):
-        lines.append((m["date"], f"[общая встреча, без номера] {human_date(m['date'])} — {m['activity'] or 'досуг ещё выбираем'}"))
+    for m in open_meetups(db, chat_id, today.isoformat()):
+        lines.append((m["date"], f"[общая встреча, без номера] {human_date(m['date'])} — место ещё не выбрали"))
     for p in db.upcoming_plans(chat_id, today.isoformat()):
         lines.append((p["date"], f"[#{p['id']}] {plan_line(p, who=True)}"))
     return "\n".join(text for _, text in sorted(lines, key=lambda x: x[0]))
@@ -223,11 +232,12 @@ async def meetup_ideas(db: Database, cfg: Config, chat_id: int, meeting_date: st
     return ideas
 
 
-async def propose_activities(bot: Bot, db: Database, cfg: Config, chat_id: int,
-                             meeting_id: int, meeting_date: str) -> None:
+async def share_ideas(bot: Bot, db: Database, cfg: Config, chat_id: int, meeting_date: str) -> None:
+    """A few ideas for the meetup date, just for inspiration: the group picks the place itself, so no poll."""
     ideas = await meetup_ideas(db, cfg, chat_id, meeting_date)
-    options = [planner.idea_option(i) for i in ideas]
-    lines = [f"Что делаем {html.escape(human_date(meeting_date))}? Варианты:"]
+    if not ideas:
+        return
+    lines = [f"Пара идей на {html.escape(human_date(meeting_date))}, если нужно вдохновение:"]
     for idea in ideas:
         line = f"{planner.KIND_EMOJI.get(idea['kind'], '✨')} <b>{html.escape(idea['title'])}</b>"
         if idea.get("details"):
@@ -241,17 +251,6 @@ async def propose_activities(bot: Bot, db: Database, cfg: Config, chat_id: int,
             line += "\n    " + " · ".join(links)
         lines.append(line)
     await bot.send_message(chat_id, "\n".join(lines), parse_mode=ParseMode.HTML, link_preview_options=NO_PREVIEW)
-
-    msg = await bot.send_poll(
-        chat_id,
-        question=planner.truncate(f"Выбираем досуг на {human_date(meeting_date)} 🥂", 300),
-        options=options,
-        is_anonymous=False,
-        allows_multiple_answers=False,
-    )
-    closes_at = datetime.now(timezone.utc) + timedelta(hours=cfg.activity_poll_hours)
-    db.add_poll(msg.poll.id, chat_id, msg.message_id, "activity", options,
-                {"meeting_id": meeting_id, "ideas": ideas}, closes_at)
 
 
 async def finish_poll(bot: Bot, db: Database, cfg: Config, poll) -> None:
@@ -297,36 +296,15 @@ async def finish_poll(bot: Bot, db: Database, cfg: Config, poll) -> None:
             )
             return
         meeting_date = dates[winner]
-        meeting_id = db.add_meeting(chat_id, meeting_date)
+        db.add_meeting(chat_id, meeting_date)
         await bot.send_message(
             chat_id,
             f"🗓 Решено! Встречаемся <b>{html.escape(human_date(meeting_date))}</b> "
             f"(голосов: {counts[winner]}).",
             parse_mode=ParseMode.HTML,
         )
-        await propose_activities(bot, db, cfg, chat_id, meeting_id, meeting_date)
-
-    elif poll["kind"] == "activity":
-        ideas = payload["ideas"]
-        winner = planner.pick_winner(counts)
-        note = ""
-        if winner is None:
-            winner = random.randrange(len(ideas))
-            note = "Голосов не было — доверилась судьбе 🎲\n"
-        idea = ideas[winner]
-        meeting = db.get_meeting(payload["meeting_id"])
-        db.set_meeting_plan(meeting["id"], idea["title"], idea_details(idea))
-        if idea.get("id"):
-            db.mark_idea_used(idea["id"])
-        await bot.send_message(
-            chat_id,
-            f"{note}✅ <b>План готов!</b>\n"
-            f"🗓 {html.escape(human_date(meeting['date']))}\n"
-            f"{planner.KIND_EMOJI.get(idea['kind'], '✨')} {html.escape(idea['title'])}"
-            + (f"\n📝 {html.escape(idea_details(idea))}" if idea_details(idea) else "")
-            + "\n\nВсё сохранено в /agenda",
-            parse_mode=ParseMode.HTML,
-        )
+        await share_ideas(bot, db, cfg, chat_id, meeting_date)
+    # an old place poll (Gigi no longer posts them) just closes, without picking a place
 
 
 async def remind(bot: Bot, db: Database, poll, *, quiet_if_done: bool) -> None:
@@ -345,7 +323,7 @@ async def remind(bot: Bot, db: Database, poll, *, quiet_if_done: bool) -> None:
         if not quiet_if_done:
             await bot.send_message(chat_id, "Все уже проголосовали — вы чудо 💖")
         return
-    what = {"date": "за даты", "activity": "за досуг"}.get(poll["kind"], "в опросе")
+    what = "за даты" if poll["kind"] == "date" else "в опросе"
     await bot.send_message(
         chat_id,
         f"Девочки, ждём ваш голос {what} 🙏 " + ", ".join(mention(m["user_id"], m["name"]) for m in missing),
@@ -404,6 +382,8 @@ async def reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     db, cfg = _db(context), _cfg(context)
     today = datetime.now(cfg.tz).date()
     for poll in db.open_polls():
+        if poll["kind"] != "date":
+            continue  # only the date poll is worth tagging people over
         if json.loads(poll["payload"]).get("group"):
             continue  # a later part of a date poll: the reminder for the first part covers it
         if not reminder_due(poll, today, cfg.tz):
@@ -1137,7 +1117,7 @@ async def ideas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def agenda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     today = datetime.now(_cfg(context).tz).date().isoformat()
-    meetings = _db(context).upcoming_meetings(update.effective_chat.id, today)
+    meetings = open_meetups(_db(context), update.effective_chat.id, today)
     plans = _db(context).upcoming_plans(update.effective_chat.id, today)
     reminders = _db(context).reminders(update.effective_chat.id)
     if not meetings and not plans and not reminders:
@@ -1145,11 +1125,7 @@ async def agenda_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     lines = ["📒 <b>Общая повестка</b>"]
     for m in meetings:
-        line = f"🗓 <b>{html.escape(human_date(m['date']))}</b> — "
-        line += html.escape(m["activity"]) if m["activity"] else "<i>выбираем досуг…</i>"
-        if m["details"]:
-            line += f"\n    📝 {html.escape(m['details'])}"
-        lines.append(line)
+        lines.append(f"🗓 <b>{html.escape(human_date(m['date']))}</b> — встречаемся, <i>место ещё не выбрали</i>")
     if plans:
         lines.append("\n📌 <b>Планы</b>")
         lines.extend(f"#{p['id']} {plan_line(p, links=True)}" for p in plans)
