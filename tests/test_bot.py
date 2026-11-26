@@ -57,11 +57,8 @@ class RequestedPollTest(unittest.TestCase):
         tg = SimpleNamespace(stop_poll=AsyncMock(), send_message=AsyncMock())
         asyncio.run(bot.finish_poll(tg, self.db, None, poll))
 
-        text = plain(tg.send_message.call_args.args[1])
-        self.assertIn("23 января", text)
-        self.assertIn("голосов: 1", text)
-        self.assertNotIn("ноябр", text)
-        self.assertEqual(tg.send_message.call_count, 1)  # no activity poll after a custom one
+        tg.stop_poll.assert_called_once()
+        tg.send_message.assert_not_called()  # no "Встречаемся ... ноября", no result announcement either
         self.assertEqual([p["poll_id"] for p in self.db.open_polls(-100)], ["p-date"])
 
     def test_requested_poll_without_votes(self):
@@ -69,7 +66,21 @@ class RequestedPollTest(unittest.TestCase):
             "question": "Кино?", "options": ["Да", "Нет"]}))
         tg = SimpleNamespace(stop_poll=AsyncMock(), send_message=AsyncMock())
         asyncio.run(bot.finish_poll(tg, self.db, None, self.db.get_poll("p-custom")))
-        self.assertIn("голосов не было", tg.send_message.call_args.args[1])
+        tg.send_message.assert_not_called()
+
+    def test_due_requested_poll_is_forgotten_not_closed(self):
+        # feedback: "📊 Опрос «Куда идём 6 декабря?» закрыт: Sojubar" was noise; Gigi only closes date polls
+        asyncio.run(bot.create_requested_poll(self.fake_message(), self.db, {
+            "question": "Куда идём 6 декабря?", "options": ["Sojubar", "Кино"]}))
+        self.db.record_vote("p-custom", 1, [0])
+        tg = SimpleNamespace(stop_poll=AsyncMock(), send_message=AsyncMock())
+        self.db.conn.execute("UPDATE polls SET closes_at = ?",
+                             ((datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),))
+        with patch.object(bot, "_db", return_value=self.db), patch.object(bot, "_cfg", return_value=None):
+            asyncio.run(bot.close_due_job(SimpleNamespace(bot=tg)))
+        tg.stop_poll.assert_not_called()
+        tg.send_message.assert_not_called()
+        self.assertEqual(self.db.open_polls(-100), [])
 
     def test_parse_date(self):
         self.assertEqual(bot._parse_date("2026-10-31", date(2026, 1, 1)), date(2026, 10, 31))

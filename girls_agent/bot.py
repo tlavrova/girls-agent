@@ -268,21 +268,8 @@ async def finish_poll(bot: Bot, db: Database, cfg: Config, poll) -> None:
             log.warning("stop_poll failed: %s", e)
 
     chat_id = poll["chat_id"]
-    options = json.loads(poll["options"])
-    payload = json.loads(poll["payload"])
-    counts = planner.tally(db.votes(poll["poll_id"]), len(options))
-
-    if poll["kind"] == "custom":
-        best = max(counts, default=0)
-        if best == 0:
-            text = f"Опрос «{html.escape(payload['question'])}» закрыт — голосов не было."
-        else:
-            winners = ", ".join(f"<b>{html.escape(o)}</b>" for o, c in zip(options, counts) if c == best)
-            text = (f"📊 Опрос «{html.escape(payload['question'])}» закрыт: {winners} "
-                    f"(голосов: {best}).")
-        await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_to_message_id=poll["message_id"])
-
-    elif poll["kind"] == "date":
+    # a poll someone asked for just stops: the group sees the result itself, an announcement is noise
+    if poll["kind"] == "date":
         dates, counts = [], []
         for p in group:  # the parts' dates and counts joined in order, as if it were one poll
             part_dates = json.loads(p["payload"])["dates"]
@@ -429,6 +416,11 @@ async def forget_old_plans_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def close_due_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     db, cfg = _db(context), _cfg(context)
     for poll in db.due_polls(datetime.now(timezone.utc)):
+        if poll["kind"] != "date":
+            # Gigi only closes the monthly date poll; a poll someone asked for stays open in Telegram
+            # and is just forgotten here, so /close won't pick it over a date poll later
+            db.close_poll(poll["poll_id"])
+            continue
         try:
             await finish_poll(context.bot, db, cfg, poll)
         except TelegramError as e:
@@ -781,7 +773,7 @@ async def create_requested_poll(message, db: Database, args: dict) -> None:
                 {"question": question}, closes_at)
 
 
-CUSTOM_POLL_OPEN = timedelta(days=3)  # then Gigi closes it and posts the result
+CUSTOM_POLL_OPEN = timedelta(days=3)  # then Gigi forgets it (the poll itself stays open)
 
 TIME_RE = re.compile(r"([01]?\d|2[0-3]):[0-5]\d")
 OVERLAP = timedelta(hours=2)  # plans this close on the same day probably clash
